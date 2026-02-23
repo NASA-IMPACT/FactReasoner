@@ -1,19 +1,17 @@
 # This is a simple example
 
 from mellea.backends import ModelOption
-from mellea_ibm.rits import RITSBackend, RITS
 
 # Local imports
 from src.fact_reasoner.core.summarizer import ContextSummarizer
 
+from mellea.backends.ollama import OllamaBackend
+from mellea.stdlib.base import Context, Component
+
+MODEL_NAME = os.get("MODEL_NAME", "llama3")
+backend = OllamaBackend(model_id=MODEL_NAME)
+
 with_ref = False
-
-# Create a Mellea RITS backend
-from mellea_ibm.rits import RITSBackend, RITS
-backend = RITSBackend(
-    RITS.LLAMA_3_3_70B_INSTRUCT, model_options={ModelOption.MAX_NEW_TOKENS: 4096}
-)
-
 # Create the context summarizer
 summarizer = ContextSummarizer(backend=backend, with_reference=with_ref)
 

@@ -3,15 +3,15 @@
 import asyncio
 
 from mellea.backends import ModelOption
-from mellea_ibm.rits import RITSBackend, RITS
+from mellea.backends.ollama import OllamaBackend
+from mellea.stdlib.base import Context, Component
+
+MODEL_NAME = os.get("MODEL_NAME", "llama3")
+backend = OllamaBackend(model_id=MODEL_NAME)
+
 
 # Local imports
 from src.fact_reasoner.core.atomizer import Atomizer
-
-# Create a Mellea RITS backend
-backend = RITSBackend(
-    RITS.LLAMA_3_3_70B_INSTRUCT, model_options={ModelOption.MAX_NEW_TOKENS: 4096}
-)
 
 # Create the atomizer
 atomizer = Atomizer(backend=backend)

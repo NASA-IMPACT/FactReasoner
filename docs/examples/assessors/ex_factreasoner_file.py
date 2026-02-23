@@ -14,10 +14,12 @@ from src.fact_reasoner.core.query_builder import QueryBuilder
 from src.fact_reasoner.assessor import FactReasoner
 
 # Create a Mellea RITS backend
-from mellea_ibm.rits import RITSBackend, RITS
-backend = RITSBackend(
-    RITS.LLAMA_3_3_70B_INSTRUCT, model_options={ModelOption.MAX_NEW_TOKENS: 4096},
-)
+from mellea.backends.ollama import OllamaBackend
+from mellea.stdlib.base import Context, Component
+
+MODEL_NAME = os.get("MODEL_NAME", "llama3")
+backend = OllamaBackend(model_id=MODEL_NAME)
+
 
 # Set cache dir for context retriever
 cache_dir = None # "/home/radu/data/cache"
@@ -28,10 +30,10 @@ qb = QueryBuilder(backend)
 atom_extractor = Atomizer(backend)
 atom_reviser = Reviser(backend)
 context_retriever = ContextRetriever(
-    service_type="google", 
-    top_k=5, 
-    cache_dir=cache_dir, 
-    fetch_text=True, 
+    service_type="google",
+    top_k=5,
+    cache_dir=cache_dir,
+    fetch_text=True,
     query_builder=qb
 )
 context_summarizer = ContextSummarizer(backend)
@@ -66,7 +68,7 @@ pipeline.build(
     remove_duplicates=True,
     summarize_contexts=False,
     contexts_per_atom_only=False,
-    rel_atom_context=True, 
+    rel_atom_context=True,
     rel_context_context=False,
 )
 
@@ -82,4 +84,3 @@ output["results"] = results
 with open(output_file, "w") as fp:
     json.dump(output, fp, indent=4)
 print(f"Done.")
-

@@ -1,17 +1,18 @@
 # This is a simple example
 
 from mellea.backends import ModelOption
-from mellea_ibm.rits import RITSBackend, RITS
 
 # Local imports
 from src.fact_reasoner.core.query_builder import QueryBuilder
 from src.fact_reasoner.core.retriever import ContextRetriever, fetch_text_from_link
 
 # Create a Mellea RITS backend
-from mellea_ibm.rits import RITSBackend, RITS
-backend = RITSBackend(
-    RITS.LLAMA_3_3_70B_INSTRUCT, model_options={ModelOption.MAX_NEW_TOKENS: 4096}
-)
+from mellea.backends.ollama import OllamaBackend
+from mellea.stdlib.base import Context, Component
+
+MODEL_NAME = os.get("MODEL_NAME", "llama3")
+backend = OllamaBackend(model_id=MODEL_NAME)
+
 
 # query_text = "Lanny Flaherty has appeared in Law & Order."
 # query_text = "Unsupervised learning is the primary method used for analyzing soil quality in oil palm plantations"

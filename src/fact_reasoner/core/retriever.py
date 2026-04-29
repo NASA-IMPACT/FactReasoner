@@ -19,15 +19,14 @@ import chromadb
 import requests
 import torch
 import asyncio
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from typing import Dict, List, Optional
 
 from tqdm import tqdm
 
 from bs4 import BeautifulSoup
 from chromadb.utils import embedding_functions
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional
+from typing import Any
 from io import BytesIO
 from PyPDF2 import PdfReader
 from itertools import islice
@@ -59,6 +58,10 @@ CHARACTER_SPLITTER = RecursiveCharacterTextSplitter(
     chunk_size=1000,
     chunk_overlap=0
 )
+
+MAX_RESPONSE_BYTES = 5 * 1024 * 1024  # 5 MB cap on fetched body size
+DEFAULT_PER_URL_TIMEOUT = 60  # seconds, wall-clock cap per link fetch
+DEFAULT_PER_ATOM_TIMEOUT = 180  # seconds, wall-clock cap per atom retrieval
 
 # Regex patterns to remove common inline citation forms
 CITATION_PATTERNS = [
@@ -144,20 +147,28 @@ def _extract_pdf_paragraphs(pdf_bytes: bytes, max_pages: int = 1) -> str:
     cleaned_paragraphs = [ _clean_text(p) for p in raw_paragraphs if p and p.strip() ]
     return _clean_text(" ".join(cleaned_paragraphs))
 
-def extract_text_from_url(url: str, timeout: int = 10, max_pages: int = 1) -> str:
+def _read_capped(response: requests.Response, max_bytes: int) -> Optional[bytes]:
+    """Stream the response body, aborting if it exceeds max_bytes. Returns None on overflow."""
+    buf = bytearray()
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        if not chunk:
+            continue
+        buf.extend(chunk)
+        if len(buf) > max_bytes:
+            return None
+    return bytes(buf)
+
+def extract_text_from_url(url: str, max_pages: int = 1) -> str:
     """
     Extract text from a given URL.
 
     - HTML: returns ONLY the text inside <p> tags; removes citations; single-line output.
     - PDF: uses a simple paragraph heuristic; single-line output.
-    - Avoids resource leaks by closing the response.
-
-    Args:
-        url (str): The web link to extract text from.
-        timeout (int): Request timeout in seconds (default: 20).
+    - Streams the body with a MAX_RESPONSE_BYTES cap; oversized payloads are rejected.
+    - Uses a split connect/read timeout to bound connection and socket-read phases.
 
     Returns:
-        str: Single-line cleaned text (paragraphs-only for HTML).
+        str: Single-line cleaned text (paragraphs-only for HTML), or "" on any error.
     """
     headers = {
         "User-Agent": (
@@ -168,25 +179,28 @@ def extract_text_from_url(url: str, timeout: int = 10, max_pages: int = 1) -> st
 
     response = None
     try:
-        response = requests.get(url, stream=True, timeout=timeout, headers=headers)
+        response = requests.get(url, stream=True, timeout=(5, 20), headers=headers)
         response.raise_for_status()
         content_type = (response.headers.get("Content-Type") or "").lower()
 
+        body = _read_capped(response, MAX_RESPONSE_BYTES)
+        if body is None:
+            logger.warning(f"Response exceeded {MAX_RESPONSE_BYTES} bytes, skipping: {url}")
+            return ""
+
         # PDF branch
         if "pdf" in content_type or url.lower().endswith(".pdf"):
-            # Use response.content to avoid manual streaming complexity; small PDFs fit fine in memory.
-            return _extract_pdf_paragraphs(response.content, max_pages=max_pages)
+            return _extract_pdf_paragraphs(body, max_pages=max_pages)
 
         # HTML branch
-        soup = BeautifulSoup(response.content, "html.parser")
+        soup = BeautifulSoup(body, "html.parser")
         return _extract_html_paragraphs(soup)
 
     except Exception as e:
-        logger.error(f"Error extracting text: {e}")
+        logger.warning(f"Error extracting text from {url}: {e}")
         return ""
 
     finally:
-        # Ensure response is closed to avoid memory/resource leaks
         try:
             if response is not None:
                 response.close()
@@ -338,7 +352,8 @@ class Retriever:
             fetch_text: bool = False,
             use_in_memory_vectorstore: bool = False,
             query_builder: QueryBuilder = None,
-            num_workers: int = 4
+            num_workers: int = 4,
+            per_url_timeout: int = DEFAULT_PER_URL_TIMEOUT,
     ):
         """
         Initialize the context retriever component.
@@ -365,10 +380,14 @@ class Retriever:
                 An instance of QueryBuilder to generate search queries.
             num_workers: int
                 Number of threads for parallel link fetching (default: 4).
+            per_url_timeout: int
+                Wall-clock timeout (seconds) for each link fetch; hung fetches are
+                dropped and recorded as empty text.
         """
 
         self.top_k = top_k
         self.num_workers = num_workers
+        self.per_url_timeout = per_url_timeout
         self.service_type = service_type
         self.cache_dir = cache_dir
         self.persist_dir = persist_dir
@@ -500,18 +519,34 @@ class Retriever:
             # --- Parallel fetch all links ---
             if self.fetch_text:
                 max_sz = None if self.use_in_memory_vectorstore else max_size
+                # Since workers run in parallel, the whole batch's wall-clock budget is
+                # the per-URL budget plus a small margin for scheduling.
+                batch_deadline = self.per_url_timeout + 5
                 with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
                     fetch_futures = {
                         executor.submit(fetch_text_from_link, hit["link"], max_sz): i
                         for i, hit in enumerate(search_hits)
                     }
                     fetched_texts = [""] * n
-                    for future in as_completed(fetch_futures):
-                        idx = fetch_futures[future]
-                        try:
-                            fetched_texts[idx] = future.result()
-                        except Exception:
-                            fetched_texts[idx] = ""
+                    try:
+                        for future in as_completed(fetch_futures, timeout=batch_deadline):
+                            idx = fetch_futures[future]
+                            try:
+                                fetched_texts[idx] = future.result()
+                            except Exception as e:
+                                link = search_hits[idx]["link"]
+                                logger.warning(f"Fetch failed for {link}: {e}")
+                                fetched_texts[idx] = ""
+                    except FuturesTimeoutError:
+                        # Any futures still pending at the deadline are dropped. Threads
+                        # cannot be killed from Python, but the batch proceeds.
+                        for future, idx in fetch_futures.items():
+                            if not future.done():
+                                link = search_hits[idx]["link"]
+                                logger.warning(
+                                    f"Fetch timed out after {self.per_url_timeout}s: {link}"
+                                )
+                                future.cancel()
             else:
                 fetched_texts = [""] * n
 
@@ -579,10 +614,12 @@ class ContextRetriever:
         retriever: Retriever,
         context_summarizer: Optional[ContextSummarizer] = None,
         num_workers: int = 4,
+        per_atom_timeout: int = DEFAULT_PER_ATOM_TIMEOUT,
     ):
         self.retriever = retriever
         self.context_summarizer = context_summarizer
         self.num_workers = num_workers
+        self.per_atom_timeout = per_atom_timeout
 
     def _retrieve_for_item(
         self,
@@ -645,14 +682,29 @@ class ContextRetriever:
                 )
                 futures[future] = ("query", None)
 
-            # Collect results with progress bar
+            # Collect results with progress bar. A per-atom wall-clock cap ensures
+            # one stuck task cannot stall the entire batch.
             for future in tqdm(
                 as_completed(futures),
                 total=len(futures),
                 desc="Retrieving contexts",
             ):
                 aid, atom = futures[future]
-                contexts = future.result()
+                try:
+                    contexts = future.result(timeout=self.per_atom_timeout)
+                except FuturesTimeoutError:
+                    label = atom.text if atom is not None else "query"
+                    logger.warning(
+                        f"Retrieval timed out after {self.per_atom_timeout}s for atom "
+                        f"{aid!r}: {label[:120]!r}"
+                    )
+                    continue
+                except Exception as e:
+                    label = atom.text if atom is not None else "query"
+                    logger.warning(
+                        f"Retrieval failed for atom {aid!r} ({label[:120]!r}): {e}"
+                    )
+                    continue
                 for ctx in contexts:
                     all_contexts[ctx.id] = ctx
                 if atom is not None:

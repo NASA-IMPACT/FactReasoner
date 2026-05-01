@@ -128,6 +128,7 @@ class FactReasoner:
 
         self.num_retrieved_contexts = 0
         self.num_summarized_contexts = 0
+        self.timing = {}
 
         # The fact graph and probabilistic model (Markov Network)
         self.fact_graph = None
@@ -312,6 +313,7 @@ class FactReasoner:
         assert self.nli_extractor is not None, f"The NLI extractor must be created."
 
         print(f"[FactReasoner] Building the pipeline ...")
+        _build_start = time.perf_counter()
 
         # Build the atoms
         if has_atoms == False:
@@ -321,9 +323,12 @@ class FactReasoner:
                 self.atom_extractor is not None
             ), f"The atom extractor must be created."
 
+            _t = time.perf_counter()
             self.atoms = build_atoms(
                 response=self.response, atom_extractor=self.atom_extractor
             )
+            self.timing["atom_extraction"] = time.perf_counter() - _t
+            print(f"[FactReasoner][TIMING] Atom extraction: {self.timing['atom_extraction']:.4f}s")
             self.revise_atoms = True  # revise the atoms if newly created
             print(f"[FactReasoner] Extracted {len(self.atoms)} atoms.")
             for aid in self.atoms.keys():
@@ -342,7 +347,10 @@ class FactReasoner:
             assert self.response is not None, f"The atom reviser requires a response."
             atom_ids = [aid for aid in sorted(self.atoms.keys())]
             old_atoms = [self.atoms[aid].get_text() for aid in atom_ids]
+            _t = time.perf_counter()
             result = self.atom_reviser.run(old_atoms, self.response)
+            self.timing["atom_revision"] = time.perf_counter() - _t
+            print(f"[FactReasoner][TIMING] Atom revision: {self.timing['atom_revision']:.4f}s")
             for i, aid in enumerate(atom_ids):
                 elem = result[i]
                 self.atoms[aid].set_text(elem["revised_unit"])
@@ -354,12 +362,15 @@ class FactReasoner:
 
         # Build the contexts (per atom)
         if has_contexts == False:  # check if contexts already in file
+            _t = time.perf_counter()
             self.contexts = build_contexts(
                 atoms=self.atoms,
                 query=self.query,
                 retriever=self.context_retriever,
                 use_fast_retriever=use_fast_retriever,
             )
+            self.timing["context_retrieval"] = time.perf_counter() - _t
+            print(f"[FactReasoner][TIMING] Context retrieval: {self.timing['context_retrieval']:.4f}s")
 
         # For tracking purposes
         self.num_retrieved_contexts = len(self.contexts.keys())
@@ -382,8 +393,10 @@ class FactReasoner:
         # Summarize the retrieved contexts (if any)
         if self.summarize_contexts:
             print(f"[FactReasoner] Summarizing the contexts ...")
+            _t_summarize = time.perf_counter()
 
             # Summarize contexts for atoms
+            _t = time.perf_counter()
             for atom_id, atom in self.atoms.items():
                 if len(atom.contexts.keys()) > 0:
                     contexts_ids, contexts = zip(*atom.contexts.items())
@@ -416,6 +429,8 @@ class FactReasoner:
                     print(
                         f"[FactReasoner] Created {len(results)} summarized contexts for atom {atom_id}."
                     )
+            self.timing["context_summarization_atoms"] = time.perf_counter() - _t
+            print(f"[FactReasoner][TIMING] Context summarization (atoms): {self.timing['context_summarization_atoms']:.4f}s")
 
             # Summarize contexts for question
             c_qs = {
@@ -424,6 +439,7 @@ class FactReasoner:
                 if c_id.startswith("c_q")
             }
             if len(c_qs.keys()) > 0:
+                _t = time.perf_counter()
                 contexts_ids, contexts = zip(*c_qs.items())
                 results = await self.context_summarizer.run_batch(
                     [context.get_text() for context in contexts], self.query
@@ -451,12 +467,16 @@ class FactReasoner:
                 print(
                     f"[FactReasoner] Created {len(results)} summarized contexts for the question."
                 )
+                self.timing["context_summarization_question"] = time.perf_counter() - _t
+                print(f"[FactReasoner][TIMING] Context summarization (question): {self.timing['context_summarization_question']:.4f}s")
 
             # For tracking purposes
             self.num_summarized_contexts = len(self.contexts.keys())
             print(
                 f"[FactReasoner] Created {self.num_summarized_contexts} summarized contexts."
             )
+            self.timing["context_summarization_total"] = time.perf_counter() - _t_summarize
+            print(f"[FactReasoner][TIMING] Context summarization (total): {self.timing['context_summarization_total']:.4f}s")
 
             # Remove duplicated contexts that have the same summary (if any)
             if remove_duplicates:
@@ -475,6 +495,7 @@ class FactReasoner:
                     f"The `early_exit_evaluator` must be a callable function that takes in input the context and response and outputs a dict with the key `continue_pipeline_execution` (boolean) and optionally other keys with additional information about the evaluation. Instead got: {type(self.early_exit_evaluator)}"
                 )
             print("[FactReasoner] Evaluating early exit condition ...")
+            _t = time.perf_counter()
             self.early_exit_evaluation = await self.early_exit_evaluator(
                 context="\n".join(
                     [
@@ -484,6 +505,8 @@ class FactReasoner:
                 ),
                 response=self.response.strip(),
             )
+            self.timing["early_exit_evaluation"] = time.perf_counter() - _t
+            print(f"[FactReasoner][TIMING] Early exit evaluation: {self.timing['early_exit_evaluation']:.4f}s")
 
             # set default choice to `True` so that full pipeline is executed
             # if `continue_pipeline_execution` is absent from the early exit evaluation dict
@@ -495,6 +518,8 @@ class FactReasoner:
                 print(
                     "[FactReasoner] Early exit condition met, exiting reasoning pipeline, returning early exit evaluator output."
                 )
+                self.timing["build_total"] = time.perf_counter() - _build_start
+                print(f"[FactReasoner][TIMING] build() total (early exit): {self.timing['build_total']:.4f}s")
                 return
 
             print(
@@ -502,6 +527,7 @@ class FactReasoner:
             )
 
         # Build the NLI relationships
+        _t = time.perf_counter()
         self.relations = build_relations(
             atoms=self.atoms,
             contexts=self.contexts,
@@ -511,12 +537,19 @@ class FactReasoner:
             nli_extractor=self.nli_extractor,
             use_summarized_contexts=self.summarize_contexts,
         )
+        self.timing["nli_relation_extraction"] = time.perf_counter() - _t
+        print(f"[FactReasoner][TIMING] NLI relation extraction: {self.timing['nli_relation_extraction']:.4f}s")
 
         # Build the fact graph and Markov network
         print(f"[FactReasoner] Building the graphical model ...")
+        _t = time.perf_counter()
         self._build_fact_graph()
         self._build_markov_network()
+        self.timing["graphical_model_construction"] = time.perf_counter() - _t
+        print(f"[FactReasoner][TIMING] Graphical model construction: {self.timing['graphical_model_construction']:.4f}s")
 
+        self.timing["build_total"] = time.perf_counter() - _build_start
+        print(f"[FactReasoner][TIMING] build() total: {self.timing['build_total']:.4f}s")
         print(f"[FactReasoner] Pipeline instance created.")
 
     def to_json(self, json_file_path: str = None) -> Dict[str, Any]:
@@ -957,6 +990,8 @@ class FactReasoner:
         data["contexts"] = [context.to_json() for context in self.contexts.values()]
         if self.early_exit_evaluation is not None:
             data["early_exit_evaluation"] = self.early_exit_evaluation
+        if self.timing:
+            data["timing"] = self.timing
 
         if json_file_path:
             with open(json_file_path, "w") as f:

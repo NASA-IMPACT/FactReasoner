@@ -21,7 +21,6 @@ import nltk
 from nltk.tokenize import sent_tokenize
 import concurrent.futures
 
-
 # Local imports
 from .base import Atom, Context, Relation
 from .atomizer import Atomizer

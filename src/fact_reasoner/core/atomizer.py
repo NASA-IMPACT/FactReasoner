@@ -250,7 +250,9 @@ class Atomizer(object):
         results = []
         print(f"[Atomizer] Awaiting for the async execution ...")
         outputs = await asyncio.gather(*(coroutines[i] for i in range(len(coroutines))))
+
         for output in outputs:
+
             # The output is a validated JSON string; parse it
             if output.success:
                 cleaned = strip_code_fences(str(output))

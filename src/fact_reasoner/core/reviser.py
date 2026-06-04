@@ -31,7 +31,7 @@ from fact_reasoner.utils import validate_json_code_block, strip_code_fences, LOO
 
 INSTRUCTION_REVISER = """
 Instructions:
-You task is to decontextualize a UNIT to make it standalone. Each UNIT is an independent content unit or atomic unit extracted from the broader context of a RESPONSE.   
+You task is to decontextualize a UNIT to make it standalone. Each UNIT is an independent content unit or atomic unit extracted from the broader context of a RESPONSE.
 
 Vague References:
 - Pronouns (e.g., "he", "she", "they", "it")
@@ -56,8 +56,8 @@ Where <REVISED_UNIT> is the decontextualized UNIT after resolving vague referenc
 
 Use the provided examples to learn your task.
 
-Example 1: 
-UNIT: 
+Example 1:
+UNIT:
 Acorns is a financial technology company
 
 RESPONSE:
@@ -73,7 +73,7 @@ OUTPUT:
 }
 ```
 
-Example 2: 
+Example 2:
 UNIT:
 The victim had previously suffered a broken wrist.
 
@@ -235,7 +235,7 @@ class Reviser:
             coroutines.append(coroutine)
 
         results = []
-        print(f"[Reviser] Awaiting for async execution ...")
+        print("[Reviser] Awaiting for async execution ...")
         outputs = await asyncio.gather(*(coroutines[i] for i in range(len(coroutines))))
         for output in outputs:
             if output.success:

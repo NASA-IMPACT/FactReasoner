@@ -36,7 +36,7 @@ responses = [
     lunar surface. Apollo 14 brought back approximately 70 kilograms of \
     lunar material, including rocks, soil, and core samples, which have \
     been invaluable for scientific research ever since.",
-    "Lanny Flaherty is an American actor born on December 18, 1949, in Pensacola, Florida. He has appeared in numerous films, television shows, and theater productions throughout his career, which began in the late 1970s. Some of his notable film credits include \"King of New York,\" \"The Abyss,\" \"Natural Born Killers,\" \"The Game,\" and \"The Straight Story.\" On television, he has appeared in shows such as \"Law & Order,\" \"The Sopranos,\" \"Boardwalk Empire,\" and \"The Leftovers.\" Flaherty has also worked extensively in theater, including productions at the Public Theater and the New York Shakespeare Festival. He is known for his distinctive looks and deep gravelly voice, which have made him a memorable character actor in the industry."
+    'Lanny Flaherty is an American actor born on December 18, 1949, in Pensacola, Florida. He has appeared in numerous films, television shows, and theater productions throughout his career, which began in the late 1970s. Some of his notable film credits include "King of New York," "The Abyss," "Natural Born Killers," "The Game," and "The Straight Story." On television, he has appeared in shows such as "Law & Order," "The Sopranos," "Boardwalk Empire," and "The Leftovers." Flaherty has also worked extensively in theater, including productions at the Public Theater and the New York Shakespeare Festival. He is known for his distinctive looks and deep gravelly voice, which have made him a memorable character actor in the industry.',
 ]
 
 
@@ -50,7 +50,7 @@ for k, v in result.items():
     print(f"Atom {k}: {v}")
 
 # Process the batch
-print(f"Process a batch of responses ...")
+print("Process a batch of responses ...")
 results = asyncio.run(atomizer.run_batch(responses))
 for result in results:
     for k, v in result.items():

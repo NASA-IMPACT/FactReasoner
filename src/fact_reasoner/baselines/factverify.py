@@ -195,7 +195,7 @@ class FactVerify:
         self.query = data["input"]
         self.response = data["output"]
 
-        print(f"[FactVerify] Reading the atoms ...")
+        print("[FactVerify] Reading the atoms ...")
         gold_labels = []
         atom_ids = []
         self.atoms = {}
@@ -221,7 +221,7 @@ class FactVerify:
         self.labels_human = dict(zip(atom_ids, gold_labels))
         print(f"[FactVerify] Labels found: {self.labels_human}")
 
-        print(f"[FactVerify] Reading the contexts ...")
+        print("[FactVerify] Reading the contexts ...")
         for elem_dict in data["contexts"]:
             cid = elem_dict["id"]
             title = elem_dict["title"]
@@ -323,10 +323,10 @@ class FactVerify:
         self.revise_atoms = revise_atoms
 
         # Safety checks
-        assert self.atom_extractor is not None, f"The atom extractor must be created."
-        assert self.atom_reviser is not None, f"The atom reviser must be created."
+        assert self.atom_extractor is not None, "The atom extractor must be created."
+        assert self.atom_reviser is not None, "The atom reviser must be created."
 
-        print(f"[FactVerify] Building the pipeline ...")
+        print("[FactVerify] Building the pipeline ...")
 
         # Build the atoms
         if has_atoms == False:
@@ -338,14 +338,14 @@ class FactVerify:
             for aid in self.atoms.keys():
                 print(f"[FactVerify] {self.atoms[aid]}")
 
-        assert (
-            len(self.atoms) > 0
-        ), f"The atoms must be initialized before running the pipeline."
+        assert len(self.atoms) > 0, (
+            "The atoms must be initialized before running the pipeline."
+        )
 
         # Revise the atoms
         if self.revise_atoms:
-            print(f"[FactVerify] Revise the atoms ...")
-            assert self.response is not None, f"The atom reviser requires a response."
+            print("[FactVerify] Revise the atoms ...")
+            assert self.response is not None, "The atom reviser requires a response."
             atom_ids = [aid for aid in sorted(self.atoms.keys())]
             old_atoms = [self.atoms[aid].get_text() for aid in atom_ids]
             result = asyncio.run(self.atom_reviser.run_batch(old_atoms, self.response))
@@ -456,7 +456,7 @@ class FactVerify:
             )
             coroutines.append(coroutine)
 
-        print(f"[FactVerify] Awaiting for the async execution ...")
+        print("[FactVerify] Awaiting for the async execution ...")
         outputs = await asyncio.gather(*(coroutines[i] for i in range(len(coroutines))))
         for output in outputs:
             label = self._get_label(output.result)

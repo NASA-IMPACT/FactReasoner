@@ -147,12 +147,15 @@ class TestContextSummarizerRunBatch:
         async def mock_ainstruct(*args, **kwargs):
             return mock_output
 
-        with patch('src.fact_reasoner.core.summarizer.mfuncs.ainstruct', side_effect=mock_ainstruct):
-            with patch('asyncio.gather', return_value=[mock_output]):
+        with patch(
+            "src.fact_reasoner.core.summarizer.mfuncs.ainstruct",
+            side_effect=mock_ainstruct,
+        ):
+            with patch("asyncio.gather", return_value=[mock_output]):
                 summarizer = ContextSummarizer(backend=mock_backend)
                 results = await summarizer.run_batch(
                     contexts=["Long context text here."],
-                    atom_text="Test atom about something."
+                    atom_text="Test atom about something.",
                 )
 
                 assert isinstance(results, list)
@@ -182,12 +185,11 @@ class TestContextSummarizerRunBatch:
         mock_output.success = True
         mock_output.result = mock_result
 
-        with patch('asyncio.gather', return_value=[mock_output]):
+        with patch("asyncio.gather", return_value=[mock_output]):
             summarizer = ContextSummarizer(backend=mock_backend)
             # When atom_text is None, should use INSTRUCTION_WITHOUT_REF
             results = await summarizer.run_batch(
-                contexts=["Context to summarize."],
-                atom_text=None
+                contexts=["Context to summarize."], atom_text=None
             )
 
             assert len(results) == 1
@@ -214,11 +216,10 @@ class TestContextSummarizerRunBatch:
         mock_output.success = True
         mock_output.result = mock_result
 
-        with patch('asyncio.gather', return_value=[mock_output]):
+        with patch("asyncio.gather", return_value=[mock_output]):
             summarizer = ContextSummarizer(backend=mock_backend)
             results = await summarizer.run_batch(
-                contexts=["Irrelevant context."],
-                atom_text="Unrelated atom."
+                contexts=["Irrelevant context."], atom_text="Unrelated atom."
             )
 
             assert len(results) == 1

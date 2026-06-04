@@ -15,7 +15,6 @@
 
 """Unit tests for fact_reasoner.core.atomizer module."""
 
-from typing import Any
 import pytest
 from unittest.mock import MagicMock, patch
 from fact_reasoner.core.atomizer import Atomizer, INSTRUCTION_ATOMIZER
@@ -76,7 +75,9 @@ class TestAtomizerRun:
         mock_output.success = True
         mock_output.__str__ = lambda self: '```json\n{"id1": "Test atom"}\n```'
 
-        with patch('src.fact_reasoner.core.atomizer.mfuncs.instruct', return_value=mock_output):
+        with patch(
+            "src.fact_reasoner.core.atomizer.mfuncs.instruct", return_value=mock_output
+        ):
             atm = Atomizer(backend=mock_backend)
             result = atm.run("Test response text")
 
@@ -91,7 +92,9 @@ class TestAtomizerRun:
         mock_output = MagicMock()
         mock_output.success = False
 
-        with patch('src.fact_reasoner.core.atomizer.mfuncs.instruct', return_value=mock_output):
+        with patch(
+            "src.fact_reasoner.core.atomizer.mfuncs.instruct", return_value=mock_output
+        ):
             atm = Atomizer(backend=mock_backend)
             result = atm.run("Test response text")
 
@@ -103,15 +106,19 @@ class TestAtomizerRun:
 
         mock_output = MagicMock()
         mock_output.success = True
-        mock_output.__str__ = lambda self: '''```json
+        mock_output.__str__ = (
+            lambda self: """```json
 {
     "id1": "First atom",
     "id2": "Second atom",
     "id3": "Third atom"
 }
-```'''
+```"""
+        )
 
-        with patch('src.fact_reasoner.core.atomizer.mfuncs.instruct', return_value=mock_output):
+        with patch(
+            "src.fact_reasoner.core.atomizer.mfuncs.instruct", return_value=mock_output
+        ):
             atm = Atomizer(backend=mock_backend)
             result = atm.run("Test response with multiple facts")
 

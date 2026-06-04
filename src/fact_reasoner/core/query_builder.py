@@ -40,7 +40,7 @@ Process:
    - Craft a query based on the QUERY CONSTRUCTION CRITERIA.
    - Prioritize natural language queries that a typical user might enter.
    - Use special operators (quotation marks, "site:", Boolean operators, intitle:, etc.) selectively and only when they significantly enhance the query's effectiveness.
-   
+
 2. Format Final Query:
    Present your query wrapped between Markdown code fences:
    ```

@@ -5,10 +5,9 @@ from mellea_ibm.rits import RITSBackend, RITS
 
 # Local imports
 from fact_reasoner.core.query_builder import QueryBuilder
-from fact_reasoner.core.retriever import Retriever, fetch_text_from_link
+from fact_reasoner.core.retriever import Retriever
 
 # Create a Mellea RITS backend
-from mellea_ibm.rits import RITSBackend, RITS
 backend = RITSBackend(
     RITS.LLAMA_3_3_70B_INSTRUCT, model_options={ModelOption.MAX_NEW_TOKENS: 4096}
 )
@@ -16,7 +15,7 @@ backend = RITSBackend(
 # query_text = "Lanny Flaherty has appeared in Law & Order."
 # query_text = "Unsupervised learning is the primary method used for analyzing soil quality in oil palm plantations"
 query_text = "rootstock for honey crisp apples in wayne county, ny"
-cache_dir = None #"my_database.db"
+cache_dir = None  # "my_database.db"
 query_builder = QueryBuilder(backend)
 
 retriever = Retriever(
@@ -25,7 +24,7 @@ retriever = Retriever(
     cache_dir=cache_dir,
     fetch_text=True,
     use_in_memory_vectorstore=False,
-    query_builder=query_builder
+    query_builder=query_builder,
 )
 
 contexts = retriever.query(text=query_text)

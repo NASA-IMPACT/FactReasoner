@@ -37,7 +37,7 @@ from fact_reasoner.utils import (
 INSTRUCTION_NLI = """
 
 Instructions:
-You are provided with a PREMISE and a HYPOTHESIS. 
+You are provided with a PREMISE and a HYPOTHESIS.
 Your task is to evaluate the relationship between the PREMISE and the HYPOTHESIS, following the steps outlined below:
 
 1. Evaluate Relationship:
@@ -67,7 +67,7 @@ Example 2:
 PREMISE: In 2022, Passover begins in Israel at sunset on Friday, 15 April, and ends at sunset on Friday, 22 April 2022.
 HYPOTHESIS: Passover in 2022 begins at sundown on March 27.
 1. Evaluate Relationship:
-The PREMISE states that Passover in 2022 begins at sunset on Friday, 15 April, and ends at sunset on Friday, 22 April 2022. The HYPOTHESIS claims that Passover in 2022 begins at sundown on March 27. 
+The PREMISE states that Passover in 2022 begins at sunset on Friday, 15 April, and ends at sunset on Friday, 22 April 2022. The HYPOTHESIS claims that Passover in 2022 begins at sundown on March 27.
 Upon analyzing the information, I found that the dates mentioned in the PREMISE and the HYPOTHESIS do not match. Since the dates provided in the PREMISE and the HYPOTHESIS are different, the HYPOTHESIS is contradicted by the PREMISE.
 2. Reasoning:
 The PREMISE provides specific information about the start date of Passover in 2022, which is April 15. The HYPOTHESIS, on the other hand, claims a different start date, March 27. This discrepancy indicates that the PREMISE and the HYPOTHESIS cannot both be true.
@@ -279,10 +279,9 @@ class NLIExtractor:
             coroutines.append(coroutine)
 
         results = []
-        print(f"[NLI] Awaiting for async execution ...")
+        print("[NLI] Awaiting for async execution ...")
         outputs = await asyncio.gather(*(coroutines[i] for i in range(len(coroutines))))
         for output in outputs:
-
             if output.success:
                 label = self._get_label(output.result)
                 probability = self._get_probability(output.result)

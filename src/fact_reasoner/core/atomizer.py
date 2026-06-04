@@ -41,7 +41,7 @@ Rules:
 - Each atomic unit in the output must check a different piece of information found explicitly in the paragraph.
 - Each atomic unit is standalone in that any actual nouns or proper nouns should be used in place of pronouns or anaphors.
 - Each atomic unit must not include any information beyond what is explicitly stated in the provided paragraph.
-- Where possible, avoid paraphrasing and instead try to only use language used in the paragraph without introducing new words. 
+- Where possible, avoid paraphrasing and instead try to only use language used in the paragraph without introducing new words.
 - The output must be a JSON dictionary with the following format and markdown code fences such that each atomic unit has a unique ID:
 
 ```json
@@ -248,11 +248,10 @@ class Atomizer(object):
             coroutines.append(coroutine)
 
         results = []
-        print(f"[Atomizer] Awaiting for the async execution ...")
+        print("[Atomizer] Awaiting for the async execution ...")
         outputs = await asyncio.gather(*(coroutines[i] for i in range(len(coroutines))))
 
         for output in outputs:
-
             # The output is a validated JSON string; parse it
             if output.success:
                 cleaned = strip_code_fences(str(output))

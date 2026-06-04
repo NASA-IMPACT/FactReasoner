@@ -23,7 +23,7 @@ retriever = Retriever(
     fetch_text=True,
     use_in_memory_vectorstore=False,
     query_builder=query_builder,
-    num_workers=4
+    num_workers=4,
 )
 
 # Create a set of atoms to retrieve contexts for

@@ -16,7 +16,6 @@
 """Unit tests for fact_reasoner.core.nli module."""
 
 import pytest
-import math
 from unittest.mock import MagicMock, patch
 from fact_reasoner.core.nli import NLIExtractor, INSTRUCTION_NLI
 
@@ -196,11 +195,12 @@ class TestNLIExtractorRun:
         mock_output.success = True
         mock_output.result = mock_result
 
-        with patch('src.fact_reasoner.core.nli.mfuncs.instruct', return_value=mock_output):
+        with patch(
+            "src.fact_reasoner.core.nli.mfuncs.instruct", return_value=mock_output
+        ):
             nli = NLIExtractor(backend=mock_backend)
             result = nli.run(
-                premise="The sky is blue.",
-                hypothesis="The sky has color."
+                premise="The sky is blue.", hypothesis="The sky has color."
             )
 
             assert isinstance(result, dict)
@@ -215,12 +215,11 @@ class TestNLIExtractorRun:
         mock_output = MagicMock()
         mock_output.success = False
 
-        with patch('src.fact_reasoner.core.nli.mfuncs.instruct', return_value=mock_output):
+        with patch(
+            "src.fact_reasoner.core.nli.mfuncs.instruct", return_value=mock_output
+        ):
             nli = NLIExtractor(backend=mock_backend)
-            result = nli.run(
-                premise="Test premise",
-                hypothesis="Test hypothesis"
-            )
+            result = nli.run(premise="Test premise", hypothesis="Test hypothesis")
 
             assert result["label"] == "neutral"
             assert result["probability"] == 1.0

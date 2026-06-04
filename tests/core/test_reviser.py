@@ -67,18 +67,22 @@ class TestReviserRun:
 
         mock_output = MagicMock()
         mock_output.success = True
-        mock_output.__str__ = lambda self: '''```json
+        mock_output.__str__ = (
+            lambda self: """```json
 {
     "revised_unit": "Albert Einstein was German-born.",
     "rationale": "No changes needed."
 }
-```'''
+```"""
+        )
 
-        with patch('src.fact_reasoner.core.reviser.mfuncs.instruct', return_value=mock_output):
+        with patch(
+            "src.fact_reasoner.core.reviser.mfuncs.instruct", return_value=mock_output
+        ):
             reviser = Reviser(backend=mock_backend)
             result = reviser.run(
                 units=["Einstein was German-born."],
-                response="Albert Einstein was a German-born physicist."
+                response="Albert Einstein was a German-born physicist.",
             )
 
             assert isinstance(result, list)
@@ -92,18 +96,22 @@ class TestReviserRun:
 
         mock_output = MagicMock()
         mock_output.success = True
-        mock_output.__str__ = lambda self: '''```json
+        mock_output.__str__ = (
+            lambda self: """```json
 {
     "revised_unit": "Revised atom",
     "rationale": "Resolved reference."
 }
-```'''
+```"""
+        )
 
-        with patch('src.fact_reasoner.core.reviser.mfuncs.instruct', return_value=mock_output):
+        with patch(
+            "src.fact_reasoner.core.reviser.mfuncs.instruct", return_value=mock_output
+        ):
             reviser = Reviser(backend=mock_backend)
             result = reviser.run(
                 units=["He was born in 1879.", "She won the prize."],
-                response="Albert Einstein was born in 1879. Marie Curie won the prize."
+                response="Albert Einstein was born in 1879. Marie Curie won the prize.",
             )
 
             assert len(result) == 2
@@ -115,12 +123,11 @@ class TestReviserRun:
         mock_output = MagicMock()
         mock_output.success = False
 
-        with patch('src.fact_reasoner.core.reviser.mfuncs.instruct', return_value=mock_output):
+        with patch(
+            "src.fact_reasoner.core.reviser.mfuncs.instruct", return_value=mock_output
+        ):
             reviser = Reviser(backend=mock_backend)
-            result = reviser.run(
-                units=["Test unit"],
-                response="Test response"
-            )
+            result = reviser.run(units=["Test unit"], response="Test response")
 
             # When all fail, result should be empty
             assert result == []
@@ -131,19 +138,20 @@ class TestReviserRun:
 
         mock_output = MagicMock()
         mock_output.success = True
-        mock_output.__str__ = lambda self: '''```json
+        mock_output.__str__ = (
+            lambda self: """```json
 {
     "revised_unit": "Revised version",
     "rationale": "Changed pronoun."
 }
-```'''
+```"""
+        )
 
-        with patch('src.fact_reasoner.core.reviser.mfuncs.instruct', return_value=mock_output):
+        with patch(
+            "src.fact_reasoner.core.reviser.mfuncs.instruct", return_value=mock_output
+        ):
             reviser = Reviser(backend=mock_backend)
-            result = reviser.run(
-                units=["Original text"],
-                response="Full response"
-            )
+            result = reviser.run(units=["Original text"], response="Full response")
 
             assert len(result) == 1
             assert "text" in result[0]

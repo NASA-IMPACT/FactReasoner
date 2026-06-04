@@ -174,9 +174,9 @@ def extract_logprobs_from_output(output: Dict[str, Any]) -> List[Any]:
         or output._meta.get("litellm_chat_response", {}).get("logprobs")
     )
 
-    assert (
-        logprobs_object is not None
-    ), "logprobs missing from response. Ensure the backend supports logprobs."
+    assert logprobs_object is not None, (
+        "logprobs missing from response. Ensure the backend supports logprobs."
+    )
 
     # handle openai/litllm logprobs format (dict with 'content' key) vs other backends (list of logprobs)
     if isinstance(logprobs_object, dict):
@@ -187,7 +187,6 @@ def extract_logprobs_from_output(output: Dict[str, Any]) -> List[Any]:
         logprobs_object = logprobs_object["content"]
 
     if not isinstance(logprobs_object, list):
-
         # If logprobs is not a list, it may be a ChoiceLogprobs object from litellm. Try to extract logprobs from it and massage into the format expected by the _get_probability() functions in Summarizer and NLI extractor  (list of dicts with 'token' and 'logprob' keys).
         try:
             from litellm.types.utils import ChoiceLogprobs
@@ -325,7 +324,6 @@ def validate_json_code_block(
         then also checks if it is a dictionary and contains the required keys.
     """
     try:
-
         # Remove markdown fences if present
         cleaned = strip_code_fences(input_string)
         cleaned = normalize_ws(cleaned)

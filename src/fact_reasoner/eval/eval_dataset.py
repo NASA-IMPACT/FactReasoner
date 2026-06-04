@@ -35,7 +35,6 @@ from fact_reasoner.core.summarizer import ContextSummarizer
 from fact_reasoner.core.nli import NLIExtractor
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--input_file",
@@ -171,7 +170,7 @@ if __name__ == "__main__":
             RITS.GPT_OSS_120B, model_options={ModelOption.MAX_NEW_TOKENS: 4096}
         )
     else:
-        raise ValueError(f"Unknown LLM backend.")
+        raise ValueError("Unknown LLM backend.")
 
     # from mellea.helpers.fancy_logger import FancyLogger
     # FancyLogger.get_logger().setLevel(FancyLogger.ERROR)

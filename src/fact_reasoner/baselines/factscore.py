@@ -139,7 +139,7 @@ class FactScore:
         self.response = data["output"]
         self.topic = data.get("topic", None)
 
-        print(f"[FactScore] Reading the atoms ...")
+        print("[FactScore] Reading the atoms ...")
         gold_labels = []
         atom_ids = []
         self.atoms = {}
@@ -165,7 +165,7 @@ class FactScore:
         self.labels_human = dict(zip(atom_ids, gold_labels))
         print(f"[FactScore] Lables found: {self.labels_human}")
 
-        print(f"[FactScore] Reading the contexts ...")
+        print("[FactScore] Reading the contexts ...")
         for context_dict in data["contexts"]:
             cid = context_dict["id"]
             title = context_dict["title"]
@@ -268,10 +268,10 @@ class FactScore:
         self.revise_atoms = revise_atoms
 
         # Safety checks
-        assert self.atom_extractor is not None, f"The atom extractor must be created."
-        assert self.atom_reviser is not None, f"The atom reviser must be created."
+        assert self.atom_extractor is not None, "The atom extractor must be created."
+        assert self.atom_reviser is not None, "The atom reviser must be created."
 
-        print(f"[FactScore] Building the pipeline ...")
+        print("[FactScore] Building the pipeline ...")
 
         # Build the atoms
         if has_atoms == False:
@@ -284,14 +284,14 @@ class FactScore:
                 print(f"[FactScore] {self.atoms[aid]}")
 
         # Safety checks
-        assert (
-            len(self.atoms) > 0
-        ), f"The atoms must be initialized before running the pipeline."
+        assert len(self.atoms) > 0, (
+            "The atoms must be initialized before running the pipeline."
+        )
 
         # Revise the atoms
         if self.revise_atoms:
-            print(f"[FactScore] Revising the atoms ...")
-            assert self.response is not None, f"The atom reviser requires a response."
+            print("[FactScore] Revising the atoms ...")
+            assert self.response is not None, "The atom reviser requires a response."
             atom_ids = [aid for aid in sorted(self.atoms.keys())]
             old_atoms = [self.atoms[aid].get_text() for aid in atom_ids]
             result = asyncio.run(self.atom_reviser.run_batch(old_atoms, self.response))
@@ -312,7 +312,7 @@ class FactScore:
                 use_fast_retriever=use_fast_retriever,
             )
         print(f"[FactScore] Retrieved {len(self.contexts)} contexts.")
-        print(f"[FactScore] Pipeline building completed.")
+        print("[FactScore] Pipeline building completed.")
 
     def _get_label(self, output: ModelOutputThunk) -> str:
         """
@@ -419,7 +419,7 @@ class FactScore:
             )
             coroutines.append(coroutine)
 
-        print(f"[FactScore] Awaiting for the async execution ...")
+        print("[FactScore] Awaiting for the async execution ...")
         outputs = await asyncio.gather(*(coroutines[i] for i in range(len(coroutines))))
         for output in outputs:
             label = self._get_label(output.result)

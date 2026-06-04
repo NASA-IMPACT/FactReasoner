@@ -67,7 +67,7 @@ class SearchAPI:
         Initialize the SQLite database with FTS5 for full-text search, using
         WAL mode for better concurrency.
         """
-        assert self.do_caching is True, f"Caching requires an existing cache dir."
+        assert self.do_caching is True, "Caching requires an existing cache dir."
 
         with sqlite3.connect(self.database) as conn:
             cursor = conn.cursor()
@@ -224,7 +224,6 @@ class SearchAPI:
 
 
 if __name__ == "__main__":
-
     cache_dir = None  # "my_database.db"
 
     text = "Neil B. Todd was an American geneticist"

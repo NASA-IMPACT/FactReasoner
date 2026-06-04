@@ -117,7 +117,7 @@ class FactReasoner:
         self.merlin_path = merlin_path
 
         # Safety checks
-        assert self.merlin_path is not None, f"Path to `merlin` cannot be None."
+        assert self.merlin_path is not None, "Path to `merlin` cannot be None."
 
         print(f"[FactReasoner] Using merlin at: {self.merlin_path}")
         print(f"[FactReasoner] Using atom/context priors: {self.use_priors}")
@@ -204,7 +204,7 @@ class FactReasoner:
         self.response = data["output"]
         self.topic = data.get("topic", None)
 
-        print(f"[FactReasoner] Reading the atoms ...")
+        print("[FactReasoner] Reading the atoms ...")
         gold_labels = []
         atom_ids = []
         self.atoms = {}
@@ -229,7 +229,7 @@ class FactReasoner:
         self.labels_human = dict(zip(atom_ids, gold_labels))
         print(f"[FactReasoner] Labels found: {self.labels_human}")
 
-        print(f"[FactReasoner] Reading the contexts ...")
+        print("[FactReasoner] Reading the contexts ...")
         for context_dict in data["contexts"]:
             cid = context_dict["id"]
             title = context_dict["title"]
@@ -310,47 +310,51 @@ class FactReasoner:
         self.summarize_contexts = summarize_contexts  # default is False
 
         # Safety checks
-        assert self.nli_extractor is not None, f"The NLI extractor must be created."
+        assert self.nli_extractor is not None, "The NLI extractor must be created."
 
-        print(f"[FactReasoner] Building the pipeline ...")
+        print("[FactReasoner] Building the pipeline ...")
         _build_start = time.perf_counter()
 
         # Build the atoms
         if has_atoms == False:
-            print(f"[FactReasoner] Extracting the atoms ...")
+            print("[FactReasoner] Extracting the atoms ...")
 
-            assert (
-                self.atom_extractor is not None
-            ), f"The atom extractor must be created."
+            assert self.atom_extractor is not None, (
+                "The atom extractor must be created."
+            )
 
             _t = time.perf_counter()
             self.atoms = build_atoms(
                 response=self.response, atom_extractor=self.atom_extractor
             )
             self.timing["atom_extraction"] = time.perf_counter() - _t
-            print(f"[FactReasoner][TIMING] Atom extraction: {self.timing['atom_extraction']:.4f}s")
+            print(
+                f"[FactReasoner][TIMING] Atom extraction: {self.timing['atom_extraction']:.4f}s"
+            )
             self.revise_atoms = True  # revise the atoms if newly created
             print(f"[FactReasoner] Extracted {len(self.atoms)} atoms.")
             for aid in self.atoms.keys():
                 print(f"[FactReasoner] {self.atoms[aid]}")
 
         # Safety checks
-        assert (
-            len(self.atoms) > 0
-        ), f"The atoms must be initialized before running the pipeline."
+        assert len(self.atoms) > 0, (
+            "The atoms must be initialized before running the pipeline."
+        )
 
         # Revise the atoms
         if self.revise_atoms:
-            print(f"[FactReasoner] Revising the atoms ...")
-            assert self.atom_reviser is not None, f"The atom reviser must be created."
+            print("[FactReasoner] Revising the atoms ...")
+            assert self.atom_reviser is not None, "The atom reviser must be created."
 
-            assert self.response is not None, f"The atom reviser requires a response."
+            assert self.response is not None, "The atom reviser requires a response."
             atom_ids = [aid for aid in sorted(self.atoms.keys())]
             old_atoms = [self.atoms[aid].get_text() for aid in atom_ids]
             _t = time.perf_counter()
             result = self.atom_reviser.run(old_atoms, self.response)
             self.timing["atom_revision"] = time.perf_counter() - _t
-            print(f"[FactReasoner][TIMING] Atom revision: {self.timing['atom_revision']:.4f}s")
+            print(
+                f"[FactReasoner][TIMING] Atom revision: {self.timing['atom_revision']:.4f}s"
+            )
             for i, aid in enumerate(atom_ids):
                 elem = result[i]
                 self.atoms[aid].set_text(elem["revised_unit"])
@@ -370,16 +374,18 @@ class FactReasoner:
                 use_fast_retriever=use_fast_retriever,
             )
             self.timing["context_retrieval"] = time.perf_counter() - _t
-            print(f"[FactReasoner][TIMING] Context retrieval: {self.timing['context_retrieval']:.4f}s")
+            print(
+                f"[FactReasoner][TIMING] Context retrieval: {self.timing['context_retrieval']:.4f}s"
+            )
 
         # For tracking purposes
         self.num_retrieved_contexts = len(self.contexts.keys())
         print(f"[FactReasoner] Retrieved {self.num_retrieved_contexts} contexts.")
 
         # Safety checks
-        assert (
-            len(self.contexts.keys()) > 0 or not has_contexts
-        ), f"Contexts must be initialized if `has_contexts` is True!"
+        assert len(self.contexts.keys()) > 0 or not has_contexts, (
+            "Contexts must be initialized if `has_contexts` is True!"
+        )
 
         # Remove duplicated contexts
         if remove_duplicates:
@@ -392,7 +398,7 @@ class FactReasoner:
 
         # Summarize the retrieved contexts (if any)
         if self.summarize_contexts:
-            print(f"[FactReasoner] Summarizing the contexts ...")
+            print("[FactReasoner] Summarizing the contexts ...")
             _t_summarize = time.perf_counter()
 
             # Summarize contexts for atoms
@@ -405,13 +411,12 @@ class FactReasoner:
                     )
 
                     # Safety checks
-                    assert len(results) == len(
-                        contexts
-                    ), f"The number of summaries must be equal to the number of contexts."
+                    assert len(results) == len(contexts), (
+                        "The number of summaries must be equal to the number of contexts."
+                    )
 
                     # Set the new syntheric summaries
                     for context_id, result in zip(contexts_ids, results):
-
                         is_relevant = is_relevant_context(result["summary"])
                         if result["summary"] != "" and is_relevant:
                             self.contexts[context_id].set_synthetic_summary(
@@ -430,7 +435,9 @@ class FactReasoner:
                         f"[FactReasoner] Created {len(results)} summarized contexts for atom {atom_id}."
                     )
             self.timing["context_summarization_atoms"] = time.perf_counter() - _t
-            print(f"[FactReasoner][TIMING] Context summarization (atoms): {self.timing['context_summarization_atoms']:.4f}s")
+            print(
+                f"[FactReasoner][TIMING] Context summarization (atoms): {self.timing['context_summarization_atoms']:.4f}s"
+            )
 
             # Summarize contexts for question
             c_qs = {
@@ -445,12 +452,11 @@ class FactReasoner:
                     [context.get_text() for context in contexts], self.query
                 )
 
-                assert len(results) == len(
-                    contexts
-                ), f"The number of summaries must be equal to the number of contexts."
+                assert len(results) == len(contexts), (
+                    "The number of summaries must be equal to the number of contexts."
+                )
 
                 for context_id, result in zip(contexts_ids, results):
-
                     is_relevant = is_relevant_context(result["summary"])
                     if result["summary"] != "" and is_relevant:
                         self.contexts[context_id].set_synthetic_summary(
@@ -468,15 +474,21 @@ class FactReasoner:
                     f"[FactReasoner] Created {len(results)} summarized contexts for the question."
                 )
                 self.timing["context_summarization_question"] = time.perf_counter() - _t
-                print(f"[FactReasoner][TIMING] Context summarization (question): {self.timing['context_summarization_question']:.4f}s")
+                print(
+                    f"[FactReasoner][TIMING] Context summarization (question): {self.timing['context_summarization_question']:.4f}s"
+                )
 
             # For tracking purposes
             self.num_summarized_contexts = len(self.contexts.keys())
             print(
                 f"[FactReasoner] Created {self.num_summarized_contexts} summarized contexts."
             )
-            self.timing["context_summarization_total"] = time.perf_counter() - _t_summarize
-            print(f"[FactReasoner][TIMING] Context summarization (total): {self.timing['context_summarization_total']:.4f}s")
+            self.timing["context_summarization_total"] = (
+                time.perf_counter() - _t_summarize
+            )
+            print(
+                f"[FactReasoner][TIMING] Context summarization (total): {self.timing['context_summarization_total']:.4f}s"
+            )
 
             # Remove duplicated contexts that have the same summary (if any)
             if remove_duplicates:
@@ -506,7 +518,9 @@ class FactReasoner:
                 response=self.response.strip(),
             )
             self.timing["early_exit_evaluation"] = time.perf_counter() - _t
-            print(f"[FactReasoner][TIMING] Early exit evaluation: {self.timing['early_exit_evaluation']:.4f}s")
+            print(
+                f"[FactReasoner][TIMING] Early exit evaluation: {self.timing['early_exit_evaluation']:.4f}s"
+            )
 
             # set default choice to `True` so that full pipeline is executed
             # if `continue_pipeline_execution` is absent from the early exit evaluation dict
@@ -519,7 +533,9 @@ class FactReasoner:
                     "[FactReasoner] Early exit condition met, exiting reasoning pipeline, returning early exit evaluator output."
                 )
                 self.timing["build_total"] = time.perf_counter() - _build_start
-                print(f"[FactReasoner][TIMING] build() total (early exit): {self.timing['build_total']:.4f}s")
+                print(
+                    f"[FactReasoner][TIMING] build() total (early exit): {self.timing['build_total']:.4f}s"
+                )
                 return
 
             print(
@@ -538,19 +554,25 @@ class FactReasoner:
             use_summarized_contexts=self.summarize_contexts,
         )
         self.timing["nli_relation_extraction"] = time.perf_counter() - _t
-        print(f"[FactReasoner][TIMING] NLI relation extraction: {self.timing['nli_relation_extraction']:.4f}s")
+        print(
+            f"[FactReasoner][TIMING] NLI relation extraction: {self.timing['nli_relation_extraction']:.4f}s"
+        )
 
         # Build the fact graph and Markov network
-        print(f"[FactReasoner] Building the graphical model ...")
+        print("[FactReasoner] Building the graphical model ...")
         _t = time.perf_counter()
         self._build_fact_graph()
         self._build_markov_network()
         self.timing["graphical_model_construction"] = time.perf_counter() - _t
-        print(f"[FactReasoner][TIMING] Graphical model construction: {self.timing['graphical_model_construction']:.4f}s")
+        print(
+            f"[FactReasoner][TIMING] Graphical model construction: {self.timing['graphical_model_construction']:.4f}s"
+        )
 
         self.timing["build_total"] = time.perf_counter() - _build_start
-        print(f"[FactReasoner][TIMING] build() total: {self.timing['build_total']:.4f}s")
-        print(f"[FactReasoner] Pipeline instance created.")
+        print(
+            f"[FactReasoner][TIMING] build() total: {self.timing['build_total']:.4f}s"
+        )
+        print("[FactReasoner] Pipeline instance created.")
 
     def to_json(self, json_file_path: str = None) -> Dict[str, Any]:
         """
@@ -610,13 +632,13 @@ class FactReasoner:
             A MarkovNetwork encoding of the problem.
         """
 
-        assert self.fact_graph is not None, f"The FactGraph must be built."
+        assert self.fact_graph is not None, "The FactGraph must be built."
 
         # Create an empty Markov Network
         self.markov_network = MarkovNetwork()
 
         # Create the variables corresponding to the nodes in the fact graph
-        print(f"[Building the Markov network...]")
+        print("[Building the Markov network...]")
         for node in self.fact_graph.get_nodes():
             x = node.id
             self.markov_network.add_node(x)
@@ -929,7 +951,6 @@ class FactReasoner:
             num_false_positive = 0
             num_false_negative = 0
             for aid, l in self.labels_human.items():
-
                 if l == "S":
                     avg_brier += (probabilities[aid] - 1.0) * (probabilities[aid] - 1.0)
                     true_atoms += 1

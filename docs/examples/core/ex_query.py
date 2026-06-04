@@ -7,15 +7,15 @@ from mellea_ibm.rits import RITSBackend, RITS
 from fact_reasoner.core.query_builder import QueryBuilder
 
 # Create a Mellea RITS backend
-from mellea_ibm.rits import RITSBackend, RITS
 backend = RITSBackend(
-    RITS.LLAMA_3_3_70B_INSTRUCT, model_options={ModelOption.MAX_NEW_TOKENS: 4096},
+    RITS.LLAMA_3_3_70B_INSTRUCT,
+    model_options={ModelOption.MAX_NEW_TOKENS: 4096},
 )
 
 # Create the query builder
 qb = QueryBuilder(backend)
 
-# Process a single atom (no knowledge)        
+# Process a single atom (no knowledge)
 # text = "The Apollo 14 mission to the Moon took place on January 31, 1971."
 # text = "You'd have to yell if your friend is outside the same location"
 text = "rootstock for honey crisp apples in wayne county, ny"

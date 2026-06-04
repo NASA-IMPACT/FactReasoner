@@ -21,7 +21,6 @@ import mellea.stdlib.functional as mfuncs
 
 from typing import Any, Dict, List
 from mellea.backends import Backend
-from mellea.backends import ModelOption
 from mellea.stdlib.context import SimpleContext
 from mellea.core import ModelOutputThunk
 from mellea.stdlib.sampling import RejectionSamplingStrategy
@@ -30,14 +29,14 @@ from mellea.core import FancyLogger
 from fact_reasoner.utils import LOOP_BUDGET, extract_logprobs_from_output
 
 INSTRUCTION_WITHOUT_REF = """
-You are tasked with summarising a long paragraph into a shorter, more concise version. 
+You are tasked with summarising a long paragraph into a shorter, more concise version.
 Follow these rules strictly:
 
 Rules:
-1. Do NOT add any new information.  
-2. Do NOT remove any information or meaning.  
-3. Preserve all facts, relationships, and intent.  
-4. The summary must be significantly more concise while remaining fully accurate.  
+1. Do NOT add any new information.
+2. Do NOT remove any information or meaning.
+3. Preserve all facts, relationships, and intent.
+4. The summary must be significantly more concise while remaining fully accurate.
 5. Maintain the original tone and perspective.
 
 Use the provided examples to learn the task better.
@@ -74,12 +73,12 @@ INSTRUCTION_WITH_REF = """
 
 Your task is to summarize the CONTEXT with respect to the ATOM.
 
-Instructions: 
+Instructions:
 Follow the steps below for CONTEXT summarization:
 1. The ATOM can be true, false or not verifiable according to the SUMMARY.
 2. It is very possible that no relevant information about the ATOM or related to the ATOM can be found in the CONTEXT. In this case, the SUMMARY must be: "None".
 3. If the CONTEXT does not provide information about the ATOM, or if the CONTEXT does not mention anything related to the ATOM, the SUMMARY must be: "None".
-4. If the CONTEXT provides information about the ATOM, the SUMMARY must contain the most relevant information of the CONTEXT and be such that we can fact-check the ATOM using this SUMMARY. 
+4. If the CONTEXT provides information about the ATOM, the SUMMARY must contain the most relevant information of the CONTEXT and be such that we can fact-check the ATOM using this SUMMARY.
 5. The SUMMARY must not use reported speech to refer to the CONTEXT, for instance the SUMMARY must NOT state: "according to the context", "this context mentions", or "this article outlines", but instead the SUMMARY must only summarize the CONTEXT.
 6. If the CONTEXT provides information about the ATOM, provide the SUMMARY.
 7. If the CONTEXT does not provide information about the ATOM, the SUMMARY must only provide "None". Do not mention that the context does not provide any information about the atom. Do not provide anything else.
@@ -106,7 +105,7 @@ about Hindi-language cinema , popularly known as Bollywood . + Bollywood + Bolly
 is the sobriquet for India 's Hindi language film industry , based in the city of Mumbai , \
 Maharashtra .
 
-SUMMARY: 
+SUMMARY:
 Filmfare is about Hindi-language cinema, not about cheese.
 
 Example 3:
@@ -118,7 +117,7 @@ which brought together the heads of the richest industrialized countries : Franc
 , Italy , Japan , the United Kingdom , the United States , Canada ( since 1976 ) and the \
 President of the European Commission ( starting officially in 1981 ) .
 
-SUMMARY: 
+SUMMARY:
 The 19th G7 summit did not only include Russia, but also the heads of the six \
 other richest industrialized countries and the President of the European Commission.
 
@@ -129,7 +128,7 @@ CONTEXT:
 The Amazon rainforest, often referred to as the "lungs of the Earth," spans over 5.5 million square kilometers across nine countries. \
 It is home to millions of species, many of which are yet to be discovered. The rainforest plays a crucial role in global oxygen production \
 and carbon dioxide absorption. However, it faces severe threats from deforestation, illegal mining, and climate change. Conservation efforts \
-are ongoing, with governments, environmental organizations, and indigenous communities working together to protect this vital ecosystem. 
+are ongoing, with governments, environmental organizations, and indigenous communities working together to protect this vital ecosystem.
 
 SUMMARY:
 None

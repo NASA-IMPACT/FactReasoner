@@ -71,8 +71,8 @@ FactReasoner addresses hallucination detection through a principled five-stage p
    - **Neutral**: The context neither supports nor contradicts the atom
 
    Each relationship carries a probability that becomes the strength of the corresponding edge in the Markov Network. Two methods are available for estimating it (`--nli-method`):
-   - **`logprobs`** (default): derived from the token logprobs of the generated label. Requires a logprobs-capable backend (RITS / vLLM / OpenAI).
-   - **`simbauq`**: estimated via [SIMBA-UQ](https://arxiv.org/abs/2510.13836) self-consistency (sampling across temperatures and scoring by consensus). Backend-agnostic — **required for Ollama** and for **Claude via Anthropic's OpenAI-compatible endpoint**, neither of which exposes logprobs. No extra install needed.
+   - **`logprobs`** (default): derived from the token logprobs of the generated label. Requires a logprobs-capable backend (RITS / vLLM / OpenAI / Ollama).
+   - **`simbauq`**: estimated via [SIMBA-UQ](https://arxiv.org/abs/2510.13836) self-consistency (sampling across temperatures and scoring by consensus). Backend-agnostic — **required for Claude via Anthropic's OpenAI-compatible endpoint**, which does not expose logprobs. No extra install needed.
 
    The number of NLI calls is the dominant cost of a run; see [`--nli-mode fast`](#nli-cost-control-advanced) for how to reduce it.
 
@@ -114,7 +114,7 @@ Traditional factuality methods (like FactScore) make independent binary decision
 - **Multiple Knowledge Sources**: Support for Wikipedia, Google Search API, and ChromaDB vector stores
 - **Baseline Implementations**: Includes FactScore and VeriScore methods for comparison
 - **Modular Architecture**: Each component (atomizer, retriever, NLI, summarizer) can be configured independently
-- **Backend-agnostic NLI Uncertainty**: NLI relation probabilities can be estimated from token logprobs or via SIMBA-UQ self-consistency, enabling logprob-free backends such as Ollama and Claude
+- **Backend-agnostic NLI Uncertainty**: NLI relation probabilities can be estimated from token logprobs or via SIMBA-UQ self-consistency, enabling logprob-free backends such as Claude via Anthropic's OpenAI-compatible endpoint
 - **Frontier Model Support**: Run any component against OpenAI or Claude through a single `"openai"` backend kind, with no provider-specific SDK
 - **Async Support**: Batch processing with asynchronous LLM calls for efficiency
 - **Caching**: SQLite-based caching for search API results

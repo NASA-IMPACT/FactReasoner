@@ -34,7 +34,7 @@ from fact_reasoner.utils import (
 
 INSTRUCTION_REVISER = """
 Instructions:
-You task is to decontextualize a UNIT to make it standalone. Each UNIT is an independent content unit or atomic unit extracted from the broader context of a RESPONSE.   
+You task is to decontextualize a UNIT to make it standalone. Each UNIT is an independent content unit or atomic unit extracted from the broader context of a RESPONSE, which was itself generated in answer to a QUESTION. Use the QUESTION to resolve a vague reference whenever the RESPONSE itself does not name the referent.
 
 Vague References:
 - Pronouns (e.g., "he", "she", "they", "it")
@@ -113,9 +113,30 @@ OUTPUT:
 }
 ```
 
+Example 4:
+UNIT:
+It is roughly spherical in shape.
+
+QUESTION:
+What is the size, shape, and composition of the Moon?
+
+RESPONSE:
+It is roughly spherical in shape. It is composed primarily of rock and has no significant atmosphere.
+
+OUTPUT:
+```json
+{
+    "revised_unit": "The Moon is roughly spherical in shape.",
+    "rationale": "The UNIT contains a vague reference, 'It.' The RESPONSE never names what 'it' refers to, but the QUESTION asks about 'the Moon,' so 'It' should be replaced with 'The Moon.'"
+}
+```
+
 Your task:
 UNIT:
 {{atomic_unit}}
+
+QUESTION:
+{{query}}
 
 RESPONSE:
 {{response}}
@@ -157,7 +178,9 @@ class Reviser:
         # Disable Mellea logging
         MelleaLogger.get_logger().setLevel(MelleaLogger.ERROR)
 
-    def run(self, units: list[str], response: str) -> list[dict[str, Any]]:
+    def run(
+        self, units: list[str], response: str, query: str | None = None
+    ) -> list[dict[str, Any]]:
         """
         Decontextualize the input atomic units using the response as context.
 
@@ -166,6 +189,10 @@ class Reviser:
                 The atomic units to be decontextualized.
             response: str
                 The response from which the atomic unit is decontextualized.
+            query: str | None
+                The question that produced the response. Used to resolve
+                vague references whose referent is named only in the
+                question, not in the response text itself.
         Returns:
             List[str]: A dictionary containing the revised atomic unit.
         """
@@ -191,7 +218,11 @@ class Reviser:
                             ),
                         )
                     ],
-                    user_variables={"atomic_unit": atom_text, "response": response},
+                    user_variables={
+                        "atomic_unit": atom_text,
+                        "response": response,
+                        "query": query or "",
+                    },
                     strategy=RejectionSamplingStrategy(loop_budget=LOOP_BUDGET),
                     return_sampling_results=True,
                 )
@@ -226,7 +257,9 @@ class Reviser:
             print(f"[Reviser] Failed to parse output: {e}")
             return self._fallback(atom_text)
 
-    async def run_batch(self, units: list[str], response: str) -> list[dict[str, Any]]:
+    async def run_batch(
+        self, units: list[str], response: str, query: str | None = None
+    ) -> list[dict[str, Any]]:
         """
         Decontextualize the input atomic units using the response as context.
 
@@ -235,6 +268,10 @@ class Reviser:
                 The atomic units to be decontextualized.
             response: str
                 The response from which the atomic unit is decontextualized.
+            query: str | None
+                The question that produced the response. Used to resolve
+                vague references whose referent is named only in the
+                question, not in the response text itself.
         Returns:
             List[str]: A dictionary containing the revised atomic unit.
         """
@@ -257,7 +294,11 @@ class Reviser:
                         ),
                     )
                 ],
-                user_variables={"atomic_unit": atom_text, "response": response},
+                user_variables={
+                    "atomic_unit": atom_text,
+                    "response": response,
+                    "query": query or "",
+                },
                 strategy=RejectionSamplingStrategy(loop_budget=LOOP_BUDGET),
                 return_sampling_results=True,
             )

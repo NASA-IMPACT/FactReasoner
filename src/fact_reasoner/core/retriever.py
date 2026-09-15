@@ -25,6 +25,7 @@ from concurrent.futures import (
 from io import BytesIO
 from itertools import islice
 from typing import Any
+from urllib.parse import urlparse
 
 import chromadb
 import requests
@@ -66,6 +67,36 @@ CHARACTER_SPLITTER = RecursiveCharacterTextSplitter(
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024  # 5 MB cap on fetched body size
 DEFAULT_PER_URL_TIMEOUT = 60  # seconds, wall-clock cap per link fetch
 DEFAULT_PER_ATOM_TIMEOUT = 180  # seconds, wall-clock cap per atom retrieval
+
+# Domains that are frequently a strong *semantic* match for a claim (people
+# discuss science topics there) but carry no editorial or peer-review process,
+# so they should not be treated as evidence of factual accuracy by default.
+# Callers can pass this (or their own list) as `excluded_domains` to
+# SourceRetriever.
+SOCIAL_MEDIA_DOMAINS = [
+    "facebook.com",
+    "reddit.com",
+    "quora.com",
+    "pinterest.com",
+    "tiktok.com",
+    "instagram.com",
+    "threads.net",
+    "twitter.com",
+    "x.com",
+    "linkedin.com",
+    "tumblr.com",
+]
+
+
+def _domain_matches(netloc: str, pattern: str) -> bool:
+    """
+    True if `netloc` (a URL's host, e.g. "www.facebook.com") is, or is a
+    subdomain of, `pattern` (e.g. "facebook.com"). A pattern may also be a
+    bare TLD/suffix like "gov" or "edu" to match any host ending in it.
+    """
+    netloc = netloc.lower()
+    pattern = pattern.lower().lstrip(".")
+    return netloc == pattern or netloc.endswith("." + pattern)
 
 # Regex patterns to remove common inline citation forms
 CITATION_PATTERNS = [
@@ -363,6 +394,8 @@ class SourceRetriever:
         query_builder: QueryBuilder = None,
         num_workers: int = 4,
         per_url_timeout: int = DEFAULT_PER_URL_TIMEOUT,
+        excluded_domains: list[str] | None = None,
+        included_domains: list[str] | None = None,
     ):
         """
         Initialize the source retriever component.
@@ -392,6 +425,20 @@ class SourceRetriever:
             per_url_timeout: int
                 Wall-clock timeout (seconds) for each link fetch; hung fetches are
                 dropped and recorded as empty text.
+            excluded_domains: list[str] | None
+                Only used by the "google" service. Domains (or bare TLDs like
+                "gov") whose results should be dropped, e.g. low-rigor sources
+                like social media (see `SOCIAL_MEDIA_DOMAINS`). Applied both as
+                `-site:` operators on the outgoing search query and as a filter
+                on the returned hits (belt-and-suspenders: covers cached
+                results and any host that ignores the operator).
+            included_domains: list[str] | None
+                Only used by the "google" service. If set, restricts results to
+                only these domains (or bare TLDs like "edu"), e.g. for a strict
+                "scientific sources only" mode. Applied both as an `OR`'d
+                `site:` clause on the outgoing search query and as a filter on
+                the returned hits. Takes precedence over `excluded_domains`
+                when both are set.
         """
 
         self.top_k = top_k
@@ -404,6 +451,8 @@ class SourceRetriever:
         self.use_in_memory_vectorstore = use_in_memory_vectorstore
         self.query_builder = query_builder
         self.collection_name = collection_name
+        self.excluded_domains = excluded_domains
+        self.included_domains = included_domains
 
         self.chromadb_retriever = None
         self.langchain_retriever = None
@@ -437,6 +486,28 @@ class SourceRetriever:
 
     def set_query_builder(self, query_builder: QueryBuilder = None):
         self.query_builder = query_builder
+
+    def _filter_hits_by_domain(
+        self, hits: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """
+        Apply `self.included_domains`/`self.excluded_domains` to a list of
+        Google search hits (each a dict with a "link" key), dropping any hit
+        whose link's host doesn't pass. See `SourceRetriever.__init__`.
+        """
+        filtered = []
+        for hit in hits:
+            netloc = urlparse(hit.get("link", "")).netloc
+            if self.included_domains and not any(
+                _domain_matches(netloc, pattern) for pattern in self.included_domains
+            ):
+                continue
+            if self.excluded_domains and any(
+                _domain_matches(netloc, pattern) for pattern in self.excluded_domains
+            ):
+                continue
+            filtered.append(hit)
+        return filtered
 
     def query(self, text: str, max_size: int = 4000) -> list[dict[str, Any]]:
         """
@@ -525,8 +596,27 @@ class SourceRetriever:
             else:
                 query_text = text
 
-            # Truncate the text if too long (for Google)
-            query_text = query_text if len(query_text) < 2048 else query_text[:2048]
+            # Bias the search itself towards/away from certain domains, so
+            # low-rigor sources don't consume result slots in the first place.
+            # `included_domains` wins over `excluded_domains` if both are set,
+            # matching the precedence of the post-fetch filter below.
+            if self.included_domains:
+                domain_clause = (
+                    "(" + " OR ".join(f"site:{d}" for d in self.included_domains) + ")"
+                )
+            elif self.excluded_domains:
+                domain_clause = " ".join(f"-site:{d}" for d in self.excluded_domains)
+            else:
+                domain_clause = ""
+
+            # Truncate the base query if too long (for Google), leaving room
+            # for the domain clause, then append it.
+            max_base_len = 2048 - (len(domain_clause) + 1 if domain_clause else 0)
+            query_text = (
+                query_text if len(query_text) < max_base_len else query_text[:max_base_len]
+            )
+            if domain_clause:
+                query_text = f"{query_text} {domain_clause}"
             logger.info(f"Using query text: {query_text}")
             passages = []
 
@@ -541,6 +631,13 @@ class SourceRetriever:
                 search_results = self.google_retriever.get_snippets([query_text])
 
             search_hits = search_results[query_text]
+
+            # Safety-net filter: covers cached results (cached before a filter
+            # was configured, or under a different config) and any host that
+            # doesn't respect the site: operator.
+            if self.excluded_domains or self.included_domains:
+                search_hits = self._filter_hits_by_domain(search_hits)
+
             n = len(search_hits)
 
             # --- Parallel fetch all links ---

@@ -71,10 +71,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default="logprobs",
         choices=["logprobs", "simbauq"],
         help="How the NLI extractor estimates relation probabilities: "
-        "'logprobs' needs a logprobs-capable backend (rits/vllm/OpenAI); "
-        "'simbauq' uses self-consistency and works on any backend (required for "
-        "ollama and for Claude via Anthropic's OpenAI-compatible endpoint, "
-        "neither of which exposes logprobs). Default: logprobs.",
+        "'logprobs' needs a logprobs-capable backend (rits/vllm/OpenAI/ollama); "
+        "'simbauq' uses self-consistency and works on any backend (required "
+        "for Claude via Anthropic's OpenAI-compatible endpoint, which does not "
+        "expose logprobs). Default: logprobs.",
     )
     p.add_argument(
         "--nli-similarity-metric",
@@ -387,15 +387,8 @@ def main() -> None:
             )
     # Some backends do not expose token logprobs, so the default NLI method
     # degrades to all-neutral relations. Steer the user to the SIMBA-UQ method.
-    # One if/elif so a run never prints two overlapping warnings.
     if args.nli_method == "logprobs":
-        if args.backend == "ollama":
-            print(
-                "[warning] The 'ollama' backend does not expose logprobs, so "
-                "--nli-method logprobs yields all-neutral NLI relations. Use "
-                "--nli-method simbauq for meaningful NLI probabilities on Ollama."
-            )
-        elif args.backend == "openai" and is_anthropic_compat_endpoint(args.base_url):
+        if args.backend == "openai" and is_anthropic_compat_endpoint(args.base_url):
             # Caught here, before any backend is built or any request is made.
             # A Claude endpoint configured purely via OPENAI_BASE_URL is invisible
             # to this check; build_backend warns in that case.

@@ -17,6 +17,8 @@
 
 import asyncio
 
+import pytest
+
 from fact_reasoner.utils import (
     dotdict,
     strip_string,
@@ -34,6 +36,7 @@ from fact_reasoner.utils import (
     batcher,
     run_throttled,
     gather_with_progress,
+    extract_logprobs_from_output,
 )
 
 
@@ -478,3 +481,78 @@ class TestGatherWithProgress:
 
     def test_empty_is_noop(self):
         assert asyncio.run(gather_with_progress([])) == []
+
+
+class _FakeTokenLogprob:
+    """Duck-types Mellea >=0.7's `ollama.ChatResponse.logprobs` entries."""
+
+    def __init__(self, token, logprob):
+        self.token = token
+        self.logprob = logprob
+
+
+class _FakeRaw:
+    def __init__(self, provider, response):
+        self.provider = provider
+        self.response = response
+
+
+class _FakeOllamaResponse:
+    def __init__(self, logprobs):
+        self.logprobs = logprobs
+
+
+class _FakeOutput:
+    def __init__(self, raw=None, meta=None):
+        self.raw = raw
+        self._meta = meta or {}
+
+
+class TestExtractLogprobsFromOutput:
+    """Tests for extract_logprobs_from_output across backend response shapes."""
+
+    def test_ollama_raw_shape(self):
+        output = _FakeOutput(
+            raw=_FakeRaw(
+                provider="ollama",
+                response=_FakeOllamaResponse(
+                    [_FakeTokenLogprob("hi", -0.1), _FakeTokenLogprob("!", -0.2)]
+                ),
+            )
+        )
+        assert extract_logprobs_from_output(output) == [
+            {"token": "hi", "logprob": -0.1},
+            {"token": "!", "logprob": -0.2},
+        ]
+
+    def test_ollama_raw_shape_missing_logprobs_raises(self):
+        output = _FakeOutput(
+            raw=_FakeRaw(provider="ollama", response=_FakeOllamaResponse(None))
+        )
+        with pytest.raises(AssertionError):
+            extract_logprobs_from_output(output)
+
+    def test_legacy_meta_logprobs_key(self):
+        output = _FakeOutput(meta={"logprobs": [{"token": "hi", "logprob": -0.1}]})
+        assert extract_logprobs_from_output(output) == [
+            {"token": "hi", "logprob": -0.1}
+        ]
+
+    def test_legacy_meta_oai_chat_response(self):
+        output = _FakeOutput(
+            meta={
+                "oai_chat_response": {
+                    "choices": [
+                        {"logprobs": {"content": [{"token": "hi", "logprob": -0.1}]}}
+                    ]
+                }
+            }
+        )
+        assert extract_logprobs_from_output(output) == [
+            {"token": "hi", "logprob": -0.1}
+        ]
+
+    def test_no_logprobs_anywhere_raises(self):
+        output = _FakeOutput(raw=_FakeRaw(provider="litellm", response=None))
+        with pytest.raises(AssertionError):
+            extract_logprobs_from_output(output)

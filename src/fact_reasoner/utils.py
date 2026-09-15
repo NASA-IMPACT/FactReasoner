@@ -359,6 +359,24 @@ def extract_logprobs_from_output(output: dict[str, Any]) -> list[Any]:
         A list of per-token logprob entries extracted from the output.
     """
 
+    # Mellea >=0.7 moved backend-native responses off `output._meta` and onto
+    # `output.raw` (provider name + native response object). The Ollama backend
+    # never populated `_meta` with logprobs even before that move, so it has no
+    # fallback below and must be handled here: `output.raw.response` is an
+    # `ollama.ChatResponse` whose `.logprobs` is a list of `Logprob` objects
+    # (token/logprob attributes), not the OpenAI-style dict-with-"content" shape.
+    raw = getattr(output, "raw", None)
+    if getattr(raw, "provider", None) == "ollama":
+        ollama_logprobs = getattr(raw.response, "logprobs", None)
+        assert ollama_logprobs is not None, (
+            "logprobs missing from Ollama response. Ensure the backend was "
+            "called with logprobs=True (e.g. via ModelOption.LOGPROBS)."
+        )
+        return [
+            {"token": item.token, "logprob": item.logprob}
+            for item in ollama_logprobs
+        ]
+
     # handle different logprobs formats across backends
     logprobs_object = (
         output._meta.get("logprobs")

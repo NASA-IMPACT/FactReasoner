@@ -37,7 +37,7 @@ dependencies = [
     "langchain-core",
     "langchain-huggingface",
     "langchain-text-splitters",
-    "mellea==0.6.0",
+    "mellea==0.7.0",
     "networkx",
     "nltk",
     "numpy",
@@ -55,7 +55,8 @@ dependencies = [
 
 [project.optional-dependencies]
 # RITS backends (IBM internal). See README for the mellea-ibm install source.
-rits = ["mellea-ibm"]
+# TEMP: commented out to test whether uv lock resolves without github.ibm.com access.
+# rits = ["mellea-ibm"]
 # Local vLLM server path (GPU node). vLLM is invoked as an external process, not
 # imported, so this only needs to be installed where the server is launched.
 vllm = ["vllm"]

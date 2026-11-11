@@ -14,7 +14,6 @@
 
 # Context summarization using LLMs
 
-import asyncio
 import math
 from typing import Any
 
@@ -24,10 +23,13 @@ from mellea.core import MelleaLogger, ModelOutputThunk
 from mellea.stdlib.context import SimpleContext
 from mellea.stdlib.sampling import RejectionSamplingStrategy
 
+from fact_reasoner import telemetry
 from fact_reasoner.utils import (
     LOOP_BUDGET,
     extract_logprobs_from_output,
+    handle_generation_error,
     run_throttled,
+    throttle_for,
 )
 
 INSTRUCTION_WITHOUT_REF = """
@@ -165,6 +167,8 @@ class ContextSummarizer:
         self,
         backend: Backend,
         show_progress: bool = False,
+        *,
+        raise_errors: bool = False,
     ):
         """
         Initialize the ContextSummarizer.
@@ -175,6 +179,10 @@ class ContextSummarizer:
             show_progress: bool
                 If True, ``run_batch`` shows a ``tqdm`` progress bar that advances
                 as each context summary completes. Default False.
+            raise_errors: bool
+                If True, an exception raised by the backend (e.g. a connection
+                error) propagates to the caller unchanged. Default False: the
+                error is printed and the context gets an empty summary.
         """
 
         # Safety checks
@@ -183,41 +191,52 @@ class ContextSummarizer:
                 "Mellea backend is None. Please provide a valid Mellea backend."
             )
         self.show_progress = show_progress
+        self.raise_errors = raise_errors
+        self._warned_no_logprobs = False
 
         # Initialize the extractor
         self.backend = backend
 
         # Print info
-        print(f"[Summarizer] Using Mellea backend: {self.backend.model_id}")
+        print(f"[Summarizer] Using Mellea backend: {self.backend}")
 
         # Disable Mellea logging
         MelleaLogger.get_logger().setLevel(MelleaLogger.ERROR)
 
     def _get_probability(self, output: ModelOutputThunk) -> float:
         """
-        Compute the average log probability of the generated tokens.
+        Compute the summary's confidence: the mean token probability.
+
+        The confidence multiplies the context's prior, so when the backend gives
+        no logprobs (e.g. Anthropic's OpenAI-compatible endpoint) there is no
+        information and the result is 1.0, which leaves the prior unchanged.
+        Returning 0.0 instead would zero every context prior, and a context with
+        prior 0 supports nothing, leaving every atom at 0.5.
 
         Args:
             output: ModelOutputThunk
                 The model raw output (via Mellea).
 
         Returns:
-            float: The average log probability of the generated tokens.
+            float: exp(mean token logprob), or 1.0 without logprobs.
         """
 
         try:
             logprobs = extract_logprobs_from_output(output)
         except Exception as e:  # noqa: BLE001
-            print(f"[Summarizer] Failed to extract logprobs: {e}")
-            return 0.0
+            logprobs = []
+            if not self._warned_no_logprobs:
+                print(
+                    f"[Summarizer] No logprobs ({e}); context priors are left "
+                    "unchanged by the summaries."
+                )
+                self._warned_no_logprobs = True
 
-        avg_logprob = (
-            sum(lp["logprob"] for lp in logprobs) / len(logprobs)
-            if len(logprobs) > 0
-            else math.inf
-        )
+        if not logprobs:
+            return 1.0
 
-        return math.exp(avg_logprob) if not math.isinf(avg_logprob) else 0.0
+        avg_logprob = sum(lp["logprob"] for lp in logprobs) / len(logprobs)
+        return math.exp(avg_logprob)
 
     def run(self, contexts: list[str], atom_text = None) -> list[dict[str, Any]]:
         """
@@ -232,11 +251,9 @@ class ContextSummarizer:
             List[Dict[str, Any]]: A list of summarized contexts.
         """
 
-        import concurrent.futures
+        from ._async_runner import run_coroutine
 
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            future = pool.submit(asyncio.run, self.run_batch(contexts, atom_text))
-            return future.result()
+        return run_coroutine(self.run_batch(contexts, atom_text))
 
     async def run_batch(
         self, contexts: list[str], atom_text = None
@@ -252,16 +269,40 @@ class ContextSummarizer:
         Returns:
             List[Dict[str, Any]]: A list of summarized contexts.
         """
+        return await self.run_batch_pairs(contexts, [atom_text] * len(contexts))
 
-        # Initialize the instruction
-        instruction = (
-            INSTRUCTION_WITH_REF if atom_text is not None else INSTRUCTION_WITHOUT_REF
+    async def run_batch_pairs(
+        self, contexts: list[str], atom_texts: list[str | None]
+    ) -> list[dict[str, Any]]:
+        """
+        Summarize each context with respect to its own reference text.
+
+        Lets one batch cover contexts that belong to different atoms (and to the
+        query), instead of one batch per reference.
+
+        Args:
+            contexts: List[str]
+                The list of contexts to be summarized.
+            atom_texts: List[Optional[str]]
+                The reference text for each context, positionally aligned with
+                ``contexts``. None summarizes that context without a reference.
+        Returns:
+            List[Dict[str, Any]]: A list of summarized contexts.
+        """
+        assert len(contexts) == len(atom_texts), (
+            "Each context needs exactly one reference text."
         )
 
         # Build a fresh coroutine per context. run_throttled applies bounded
         # concurrency plus a per-minute rate limit, and captures per-item
         # exceptions so a single backend failure does not drop the rest.
-        def factory(context: str):
+        def factory(pair: tuple[str, str | None]):
+            context, atom_text = pair
+            instruction = (
+                INSTRUCTION_WITH_REF
+                if atom_text is not None
+                else INSTRUCTION_WITHOUT_REF
+            )
             return mfuncs.ainstruct(
                 instruction,
                 context=SimpleContext(),
@@ -285,7 +326,12 @@ class ContextSummarizer:
             bar = tqdm(total=len(contexts), desc="Summarizing", unit="ctx")
             on_progress = bar.update
         try:
-            outputs = await run_throttled(factory, contexts, on_progress=on_progress)
+            outputs = await run_throttled(
+                factory,
+                list(zip(contexts, atom_texts)),
+                on_progress=on_progress,
+                throttle=throttle_for(self.backend),
+            )
         finally:
             if bar is not None:
                 bar.close()
@@ -296,7 +342,14 @@ class ContextSummarizer:
         for context, output in zip(contexts, outputs):
             if isinstance(output, Exception) or not getattr(output, "success", False):
                 if isinstance(output, Exception):
-                    print(f"[Summarizer] Batch item failed: {output}")
+                    handle_generation_error(
+                        output,
+                        "summarizer",
+                        "[Summarizer] Batch item failed",
+                        self.raise_errors,
+                    )
+                else:
+                    telemetry.count_fallback("summarizer", "sampling_failed")
                 results.append({"context": context, "summary": "", "probability": 0.0})
                 continue
 

@@ -1,7 +1,7 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-0.8.0-red.svg)](https://github.com/IBM/FactReasoner)
-![Static Badge](https://img.shields.io/badge/mellea-0.6.0-blue?style=flat)
+[![Version](https://img.shields.io/badge/version-0.9.0-red.svg)](https://github.com/IBM/FactReasoner)
+![Static Badge](https://img.shields.io/badge/mellea-0.8.0-blue?style=flat)
 ![Static Badge](https://img.shields.io/badge/uv-0.9.28-green?style=flat)
 
 # FactReasoner
@@ -60,6 +60,8 @@ FactReasoner addresses hallucination detection through a principled five-stage p
 
 2. **Decontextualization (Reviser)**: Atoms are revised to be standalone by resolving pronouns (e.g., "he", "she", "it"), demonstrative references (e.g., "this", "that"), unknown entities, and incomplete names. This ensures each atom can be verified without additional context.
 
+   Steps 1 and 2 can instead run as **one call** to a fine-tuned **atomizer-reviser LoRA adapter** for `granite-4.2-8b`, which returns the response's atoms already decontextualized (see [LoRA adapters](#lora-adapters-atomization-and-nli)).
+
 3. **Context Retrieval (SourceRetriever)**: For each atom, relevant evidence is gathered from external knowledge sources. FactReasoner supports multiple retrieval backends:
    - **Wikipedia**: Using LangChain's WikipediaRetriever
    - **Google Search**: Via Serper API with optional full-page content extraction
@@ -74,7 +76,15 @@ FactReasoner addresses hallucination detection through a principled five-stage p
    - **`logprobs`** (default): derived from the token logprobs of the generated label. Requires a logprobs-capable backend (RITS / vLLM / OpenAI / Ollama).
    - **`simbauq`**: estimated via [SIMBA-UQ](https://arxiv.org/abs/2510.13836) self-consistency (sampling across temperatures and scoring by consensus). Backend-agnostic — **required for Claude via Anthropic's OpenAI-compatible endpoint**, which does not expose logprobs. No extra install needed.
 
-   The number of NLI calls is the dominant cost of a run; see [`--nli-mode fast`](#nli-cost-control-advanced) for how to reduce it.
+   Two prompts are available for the base model (`--nli-prompt`):
+   - **`few_shot`** (default): the model reasons step by step before giving its label. Most accurate; the reasoning is most of an NLI call's latency.
+   - **`label_only`**: the same label definitions and examples, but the model answers with the label alone (capped at 16 tokens). About 3× faster end to end, for a small accuracy cost — see [Performance](#performance).
+
+   The relations can also be predicted by a fine-tuned **NLI LoRA adapter** for `granite-4.2-8b` in place of either prompt; both probability methods work with it unchanged (see [LoRA adapters](#lora-adapters-atomization-and-nli)).
+
+   Or by a **decision model** such as `kev`, served by Ollama, which scores each relation directly instead of generating text (see [Decision models](#decision-models-for-nli-kev)).
+
+   The number of NLI calls is the dominant cost of a run; `--nli-mode fast` (the default) reduces it — see [NLI cost control](#nli-cost-control-advanced).
 
 5. **Probabilistic Reasoning (Evaluator)**: A **Markov Network** (undirected graphical model) is constructed where:
    - **Nodes** represent atoms and contexts as binary random variables
@@ -116,6 +126,8 @@ Traditional factuality methods (like FactScore) make independent binary decision
 - **Modular Architecture**: Each component (atomizer, retriever, NLI, summarizer) can be configured independently
 - **Backend-agnostic NLI Uncertainty**: NLI relation probabilities can be estimated from token logprobs or via SIMBA-UQ self-consistency, enabling logprob-free backends such as Claude via Anthropic's OpenAI-compatible endpoint
 - **Frontier Model Support**: Run any component against OpenAI or Claude through a single `"openai"` backend kind, with no provider-specific SDK
+- **Fine-tuned LoRA Adapters**: Optional `granite-4.2-8b` adapters for one-shot atomization + decontextualization and for NLI, served by vLLM next to the base model
+- **Telemetry**: Optional OpenTelemetry traces and metrics per pipeline stage and per LLM call
 - **Async Support**: Batch processing with asynchronous LLM calls for efficiency
 - **Caching**: SQLite-based caching for search API results
 
@@ -127,14 +139,42 @@ uv pip install fact_reasoner
 ```
 
 The default install is self-contained: the **Ollama** backend (via `mellea`), the
-Google / Wikipedia / ChromaDB retrievers, SIMBA-UQ NLI uncertainty estimation, and
-the embedding similarity gate behind `--nli-mode fast`. Only backend-specific pieces
-are optional extras:
+Google / Wikipedia retrievers, SIMBA-UQ NLI uncertainty estimation, and the embedding
+similarity gate behind `--nli-mode fast`. Only backend-specific pieces are optional
+extras:
 
 ```bash
 uv pip install "fact_reasoner[rits]"   # RITS backends (needs mellea-ibm; see below)
-uv pip install "fact_reasoner[vllm]"   # local vLLM server (GPU node only)
 ```
+
+> **Note on vLLM.** There is no `vllm` extra. The local vLLM server is launched as an
+> external `vllm serve` process and never imported, so `vllm` is not a dependency of this
+> project: declaring it pinned its whole dependency tree into `uv.lock`, and every vllm
+> release caps `setuptools < 81`, below the fix for
+> [CVE-2026-59890](https://github.com/advisories/GHSA-h35f-9h28-mq5c). On the GPU node,
+> install it yourself:
+>
+> ```bash
+> pip install "vllm>=0.28"   # 0.28.0 patches vllm's own known advisories
+> ```
+
+> **Note on ChromaDB.** The `--service-type chromadb` backend is still supported, but
+> `chromadb` is **not** a dependency of this project and there is no `chroma` extra.
+> Every release up to and including 1.5.9 — the latest on PyPI — carries unpatched
+> **critical** advisories: [CVE-2026-45829](https://github.com/advisories/GHSA-f4j7-r4q5-qw2c)
+> (pre-authentication code injection) and
+> [CVE-2026-45833](https://github.com/advisories/GHSA-36p7-vc44-83pf) (code injection).
+> No patched release exists, and an optional extra would not help: `uv lock` pins every
+> extra, so declaring it at all writes a vulnerable version into `uv.lock`.
+>
+> The other retrievers (`google`, `wikipedia`, `ntrs`) need no extra install. If you do want
+> the ChromaDB backend, install it yourself and accept that risk:
+>
+> ```bash
+> pip install chromadb
+> ```
+>
+> `--service-type chromadb` raises an `ImportError` naming these CVEs if it is missing.
 
 ### From Source
 
@@ -158,9 +198,11 @@ pip install "git+ssh://git@github.ibm.com/generative-computing/mellea-ibm.git"
 |-------------------|---------|-------|
 | Ollama (local)    | default | Works out of the box via `mellea`. |
 | vLLM client       | default | OpenAI-compatible client via `mellea`; needs a running server. |
-| vLLM local server | `[vllm]` on the GPU node | Started via `fact-reasoner --backend vllm --model ...`; `vllm` runs as an external process. |
+| vLLM local server | `pip install "vllm>=0.28"` on the GPU node | Started via `fact-reasoner --backend vllm --model ...`; `vllm` runs as an external process. |
 | OpenAI / Claude   | default | Hosted frontier models via `mellea`'s `OpenAIBackend`. **No extra dependency** — Claude is reached over Anthropic's OpenAI-compatible endpoint, so the `anthropic` SDK is not required. Needs `OPENAI_API_KEY`. |
 | RITS (IBM)        | `[rits]` + `mellea-ibm` git install | IBM internal. |
+| Atomizer / NLI LoRA adapters | vLLM `--enable-lora` | Fine-tuned granite-4.2-8b stages; see [LoRA adapters](#lora-adapters-atomization-and-nli). |
+| Telemetry         | `[telemetry]` | OpenTelemetry traces and metrics; see [Telemetry](#telemetry). |
 
 ### Dependencies
 
@@ -359,15 +401,19 @@ cheaper pair set without giving up `v3`'s richer graph.
 
 | Option | Meaning |
 |--------|---------|
-| `--service-type {google,wikipedia,chromadb}` | Retrieval backend (default `google`; `google` needs `SERPER_API_KEY`). |
+| `--service-type {google,wikipedia,chromadb,ntrs}` | Retrieval backend (default `google`; `google` needs `SERPER_API_KEY`, `chromadb` needs a manual `pip install chromadb` — see the note above; `ntrs` is a public API needing no key). |
 | `--top-k` | Contexts retrieved per atom (default 3). |
 | `--cache-dir` | Retriever cache directory. |
 | `--use-summarizer` | Summarize contexts (FactReasoner only). |
 | `--use-priors` | Use atom/context priors (FactReasoner only). |
 | `--use-query-builder` | Generate search queries with the QueryBuilder. |
+| `--nli-decision-model NAME` | Predict NLI relations with an Ollama decision model (e.g. `kev`) instead of an LLM; the other stages still use `--backend`. See [Decision models](#decision-models-for-nli-kev). |
+| `--nli-decision-host URL` / `--nli-decision-serve` | Use an existing Ollama server, or start a private one for the run (with `--ollama-binary`, `--ollama-models-dir`, `--ollama-num-parallel`, `--no-ollama-pull`). |
+| `--nli-prompt {few_shot,label_only}` | NLI prompt for the base model (default `few_shot`). `label_only` asks for the label without reasoning: ~3× faster, slightly less accurate (see [Performance](#performance)). Ignored with `--nli-adapter`. |
 | `--output-file` | Single mode: write the results dict as JSON (else print). |
 | `--list-models` | Print the available unified model ids (and aliases) and exit. |
 | `--progress-bar` | Show progress bars for NLI relations, summarization and atom labeling. |
+| `--raise-errors` | Stop with the backend's exception when an LLM call fails, instead of printing it and using a fallback result (see [Handling LLM errors](#handling-llm-errors)). |
 
 ### SIMBA-UQ options (`--nli-method simbauq`)
 
@@ -376,6 +422,18 @@ cheaper pair set without giving up `v3`'s richer graph.
 | `--nli-similarity-metric {rouge,jaccard,sbert,difflib,levenshtein}` | How samples are compared when scoring consensus (default `rouge`). |
 | `--nli-confidence-method {aggregation,classifier}` | How sample confidence is scored. `aggregation` (default) is data-free; `classifier` uses a trained model. |
 | `--nli-classifier-path` | Trained SIMBA-UQ classifier (joblib) from `scripts/train_simbauq_nli.py`. Required with `--nli-confidence-method classifier`. |
+
+### LoRA adapter options (`--backend vllm`)
+
+| Option | Meaning |
+|--------|---------|
+| `--atomizer-adapter NAME` | Served name of the atomizer-reviser adapter. Atoms are extracted and decontextualized in one call; the separate revision stage is skipped. |
+| `--nli-adapter NAME` | Served name of the NLI adapter. NLI relations are predicted by it, with `--nli-method` as usual. |
+| `--atomizer-adapter-path` / `--nli-adapter-path` | With `--model` (a local server): the adapter weights to load, served under the matching name. |
+| `--max-lora-rank` | The largest adapter rank, when above vLLM's default (16). Needs an adapter path. |
+
+The adapters must be served by the same vLLM server as the base model (`--model`, or
+`--base-url` for a server you started). See [LoRA adapters](#lora-adapters-atomization-and-nli).
 
 ### NLI cost control (advanced)
 
@@ -387,7 +445,7 @@ from a mode and adjust one feature at a time.
 
 | Option | Meaning |
 |--------|---------|
-| `--nli-mode {all_pairs,fast}` | **Which pair-scoring preset to start from** (default `all_pairs`). `all_pairs` scores every enumerated pair and reproduces published numbers. `fast` bundles four settings at once: provenance pairs, gated context–context, near-duplicate collapsing, and one-direction context scoring. Orthogonal to `--pipeline-version`. Little effect on `v1`, whose atom–context pairs are already limited to each atom's own contexts and which runs no context–context phase. |
+| `--nli-mode {all_pairs,fast}` | **Which pair-scoring preset to start from** (default `fast`). `all_pairs` scores every enumerated pair and reproduces published numbers. `fast` bundles four settings at once: provenance pairs, gated context–context, near-duplicate collapsing, and one-direction context scoring. Orthogonal to `--pipeline-version`. Little effect on `v1`, whose atom–context pairs are already limited to each atom's own contexts and which runs no context–context phase. |
 | `--nli-pair-policy {all_pairs,gated,provenance}` | Which candidate pairs to score — **one knob**, where `--nli-mode` is a bundle. `all_pairs` scores every enumerated pair; `gated` prefilters on a similarity gate; `provenance` additionally restricts atom–context pairs to the atoms that retrieved each context. So `--nli-pair-policy provenance` is *weaker* than `--nli-mode fast`, which also turns on dedup, cascade and merged phases. |
 | `--nli-gate-threshold` | Similarity at or above which a pair survives the gate (default `0.20`, calibrated for the embedding backend). Deliberately low: a false prune silently weakens an atom's evidence, a false keep only costs money. |
 | `--nli-neighbor-window` | For `provenance`, how many atoms either side of an owning atom are also compared against a context (default `1`). |
@@ -455,7 +513,8 @@ runner = FactualityRunner(
     backend,
     pipeline="factreasoner",
     pipeline_version="v3",         # "v1" / "v2" / "v3" -- graph shape
-    nli_mode="fast",               # "all_pairs" (default) or "fast" -- pair cost
+    nli_mode="fast",               # "fast" (default) or "all_pairs" -- pair cost
+    nli_prompt="few_shot",         # "few_shot" (default) or "label_only" -- NLI speed
     merlin_path="/path/to/merlin",
     nli_cache_dir=".cache/nli",    # score-neutral; re-runs cost no LLM calls
 )
@@ -472,14 +531,37 @@ print(results["factuality_score"])
 all_results = runner.assess_file(
     "data/example.jsonl", "results/", dataset_name="mydata", model_id="granite4",
 )
+
+# With the LoRA adapters: one vLLM server serves the base model and both
+# adapters; each adapter is just another model id on it.
+url = "http://localhost:8000/v1"
+runner = FactualityRunner(
+    build_backend("vllm", model_id="granite-4.2-8b", base_url=url),
+    pipeline="factreasoner",
+    merlin_path="/path/to/merlin",
+    atomizer_backend=build_backend("vllm", model_id="fr-atomizer-reviser", base_url=url),
+    nli_backend=build_backend("vllm", model_id="fr-nli", base_url=url),
+)
 ```
+
+#### Handling LLM errors
+
+By default a failed LLM call is printed and replaced by a fallback (no atoms, the
+unrevised atom, a neutral relation, an empty summary), so callers cannot tell that
+the results came from fallbacks. With `raise_errors=True` (CLI: `--raise-errors`)
+the backend's own exception propagates instead, with its original type and
+traceback. `FactualityRunner` passes it to the Atomizer, Reviser, NLI and
+Summarizer stages, which also take it directly, as do `AtomizerReviser` and
+`NLIAdapterExtractor`. A stage batch raises once all its calls have finished;
+context retrieval raises on the first summarizer error and cancels the atoms still
+queued. Parsing failures and retrieval errors keep their fallbacks.
 
 ### Serving a local model on a GPU cluster (LSF)
 
 To run everything inside a single LSF job — start a local vLLM server from
 locally-available (or HuggingFace) weights, run a factuality assessor against
 it, then tear the server down — pass `--backend vllm` together with `--model`
-(a weights path or HF id). The `scripts/run_vllm.bsub` template does this:
+(a weights path or HF id):
 
 ```bash
 fact-reasoner --backend vllm \
@@ -496,9 +578,381 @@ When `--backend vllm` is given with `--model`, the server lifecycle is managed b
 tensor-parallel size from `CUDA_VISIBLE_DEVICES` (which LSF sets from the `-gpu`
 request; A100 or H100), waits for readiness, and always cleans up. Without
 `--model`, `--backend vllm` connects as a client to an existing server at
-`--base-url` / `VLLM_BASE_URL`. **The GPU node's environment must have the
-`vllm` extra installed (`pip install "fact_reasoner[vllm]"`), with GPU
-drivers/CUDA available.**
+`--base-url` / `VLLM_BASE_URL`. **The GPU node's environment must have
+`vllm` installed (`pip install "vllm>=0.28"`), with GPU drivers/CUDA available.**
+
+Both server managers stop their servers when the job is killed: an LSF `bkill` or
+walltime limit sends SIGTERM, which unwinds the run so no vLLM or Ollama process is
+left holding the GPU. The job then exits with code 143.
+
+`scripts/run_kev.bsub` is a complete template for a job that serves a decision model
+for NLI next to vLLM on one H100 — see below.
+
+### Decision models for NLI (kev)
+
+A **decision model** answers scored questions rather than generating text. Through
+Ollama's System One API, FactReasoner gives it each premise as the *state* and asks
+one three-way `choice` question per hypothesis; the model returns a probability for
+each of entailment, contradiction and neutral, and the chosen label's probability
+becomes the edge strength. It generates no tokens, so it is fast, and its
+probabilities are the model's own rather than near-certain token logprobs.
+
+```bash
+fact-reasoner --pipeline factreasoner --merlin-path /path/to/merlin --use-priors \
+    --backend rits \
+    --nli-decision-model kev \
+    --query "..." --response "..."
+```
+
+`--backend` still runs atomization, revision and summarization; only NLI moves to the
+decision model. Requests are grouped by premise (one request, many questions), which
+is ~40% faster and never changes a verdict: questions in a request are scored
+independently. It cannot be combined with `--nli-adapter`, `--nli-prompt label_only`
+or `--nli-method simbauq`. Needs the `ollama` Python package ≥ 0.6.3 (a dependency).
+
+> **Accuracy caveat.** On 10 items (248 human-labelled atoms) of
+> `data/bio-labeled_wikipedia.jsonl`, v2 with `--nli-mode fast`, `kev` reached
+> **69.8%** atom accuracy against 79.8% for the RITS few-shot prompt. Most of the gap
+> is one behavior: `kev` labels a premise about a *different* subject (e.g. a
+> namesake returned by search) as a **contradiction** where an LLM says neutral, and
+> those contradictions cancel genuine support. It reads the right page correctly.
+> These numbers come from kev's Apple-silicon (MLX) build; a CUDA node runs its
+> separate llama.cpp (GGUF) build, so re-measure on your hardware before relying on it.
+
+#### Decision models on a GPU cluster (LSF)
+
+`--nli-decision-serve` makes the run own a private Ollama server
+(`fact_reasoner.OllamaServer`): it starts `ollama serve` on a free loopback port (so
+jobs sharing a node never collide on 11434), makes sure the model is present, sends
+one warm-up request so the model is on the GPU before the first batch, and stops the
+server when the run ends. No root, system service or desktop app is needed.
+`scripts/run_kev.bsub` is a ready-to-edit template. Setup, once:
+
+1. **Install Ollama without root** — download the Linux release archive (amd64, with
+   CUDA support) from the [Ollama releases](https://github.com/ollama/ollama/releases)
+   and unpack it under your home or project space; pass its `bin/ollama` as
+   `--ollama-binary`. Use a release recent enough to serve decision models.
+2. **Pull the model into a shared store**, from a login node with internet access,
+   so every job reuses one copy instead of downloading several GB:
+   ```bash
+   export OLLAMA_MODELS=/shared/ollama-models
+   /path/to/ollama serve &  /path/to/ollama pull kev ; kill %1
+   ```
+   On a CUDA node this fetches kev's llama.cpp (GGUF) variant.
+3. In the job, pass `--ollama-models-dir /shared/ollama-models --no-ollama-pull`.
+   Without `--no-ollama-pull` a missing model is pulled at startup (within a 30-minute
+   budget); with it, the job fails at once with instructions instead.
+
+| Option | Meaning |
+|--------|---------|
+| `--nli-decision-serve` | Start and stop a private Ollama server for `--nli-decision-model`. |
+| `--ollama-binary PATH` | The `ollama` executable (default: on `PATH`). |
+| `--ollama-models-dir DIR` | Model store (`OLLAMA_MODELS`); use shared storage. |
+| `--ollama-num-parallel N` | Requests answered at once (`OLLAMA_NUM_PARALLEL`, default 8 — sized for an H100; a laptop serves one at a time). |
+| `--no-ollama-pull` | Fail instead of pulling a missing model (nodes without internet). |
+
+**Sharing one H100 with vLLM.** vLLM claims 90% of GPU memory by default, leaving too
+little for the decision model. When both run in one job, lower it, e.g.
+`--gpu-memory-utilization 0.70` (the template's default), which keeps ~24 GB of an
+80 GB H100 for kev and its parallel request slots.
+
+Startup fails fast, with the server log, when the binary is missing, the server
+exits, the model is not in the store and pulling is disabled, or the model is not a
+decision model.
+
+#### kev.serve + vLLM on a two-GPU job (fastest)
+
+`--nli-decision-server kev` runs NLI on kev's own server,
+[`kev.serve`](https://github.com/jaredpalmer/kev), instead of Ollama. It serves the
+published `jaredpalmer/kev-9b` checkpoint in bf16 with fused DeltaNet kernels and
+CUDA graphs, batches concurrent requests, and reuses each premise's prefill for all
+of its questions. It speaks the same System One API, so the NLI extractor is
+unchanged. `fact_reasoner.KevServer` starts it on a free port with a random API key,
+warms it up, and stops it with the run. Everything else stays on vLLM; one GPU per
+server:
+
+```bash
+fact-reasoner \
+    --backend vllm --model ibm-granite/granite-4.1-8b --served-model granite-4.1-8b \
+    --vllm-binary /envs/vllm/bin/vllm --vllm-gpus 0 --max-model-len 32768 \
+    --nli-decision-serve --nli-decision-server kev \
+    --kev-python /envs/kev/bin/python --kev-run jaredpalmer/kev-9b@b5d8c18e --kev-gpus 1 \
+    --pipeline factreasoner --merlin-path /path/to/merlin --use-priors \
+    --item-concurrency 16 --input-file data.jsonl --output-dir out/
+```
+
+What makes it fast:
+
+- **One GPU per server.** vLLM keeps its default memory share, and kev.serve is
+  launched before vLLM and waited for after it, so the two models load at once.
+  `--vllm-gpus` / `--kev-gpus` index the job's GPUs (LSF's `CUDA_VISIBLE_DEVICES`).
+- **Items in flight at once** (`--item-concurrency`). One item at a time leaves a
+  server idle whenever the item is on the other's stage. Use 16, with or without
+  retrieval: at 32 with retrieval, granite's queue grew so long that half the items
+  hit the 180 s retrieval cap and lost contexts (see [TIMINGS.md](TIMINGS.md),
+  run 3). Results are still written in input order, and a resumed run skips done
+  items.
+- **Pages fetched only as needed.** Google retrieval keeps the first 3 usable
+  pages of ~15 search results. It used to download all of them and wait for the
+  slowest; it now fetches in rank order, a few at a time, and stops once the first
+  3 usable pages are known. It keeps exactly the same pages.
+- **Transient failures are retried.** A request that fails in transport
+  (connection reset, read error, client-side timeout) is sent again up to twice,
+  with backoff, before its stage falls back. Server errors are not retried.
+- **No client-side limits on local servers.** The shared throttle protects remote
+  providers (32 in flight, 1500/min). For servers the job started, vLLM gets 256 in
+  flight and kev.serve 64 (its batch size), with no rate limit. `--max-concurrency`
+  overrides the vLLM ceiling.
+- **The embedding gate loads once per process, on CPU.** It used to reload the model
+  (~20 s) for every item, and on a GPU node held by the job's servers its CUDA
+  context failed, so it fell back to token Jaccard without saying why.
+
+Setup, once (kev pins `torch<2.9` and exact kernels, so it gets its own environment):
+
+```bash
+git clone https://github.com/jaredpalmer/kev.git && cd kev
+UV_PROJECT_ENVIRONMENT=/envs/kev uv sync --python-preference only-managed --python 3.13 --extra serve --no-dev
+VIRTUAL_ENV=/envs/kev uv pip install "flash-linear-attention==0.5.2" "triton>=3.7.1"
+VIRTUAL_ENV=/envs/kev uv pip install --no-deps \
+  "https://github.com/Dao-AILab/causal-conv1d/releases/download/v1.7.0/causal_conv1d-1.7.0%2Bcu12torch2.8cxx11abiTRUE-cp313-cp313-linux_x86_64.whl"
+```
+
+Use a uv-managed Python (`--python-preference only-managed`, on shared storage): a
+venv on the login node's system Python does not exist on compute nodes. Pre-download
+`ibm-granite/granite-4.1-8b`, `jaredpalmer/kev-9b@b5d8c18e` and its base
+`Qwen/Qwen3.5-9B-Base@68c46c4b` from a login node (see `scripts/run_kev_vllm.bsub`,
+the job template); jobs run with `HF_HUB_OFFLINE=1`.
+`scripts/submit_kev_vllm_smoke.sh submit|status|check` runs the smoke jobs below.
+
+Measured on BlueVela H100s, 10 items (248 human-labelled atoms) of
+`data/bio-labeled_wikipedia.jsonl`, v2, `--nli-mode fast`, `--use-priors
+--use-summarizer`, granite-4.1-8b for summarization:
+
+| | Servers ready | Pipeline | Atom accuracy | Factuality error |
+|-|---------------|----------|---------------|------------------|
+| `--item-concurrency 1` | 72 s | 124 s | 73.0% | 0.160 |
+| `--item-concurrency 8` | 46 s | 60 s | 74.6% | 0.154 |
+
+Server startup is 50–200 s, depending on how warm the node's file and Triton caches
+are. kev.serve alone answered 298 NLI pairs/s (6 labelled sanity cases: 6/6).
+Per item, NLI and summarization now take similar time (4–9 s each), so neither
+server is the bottleneck.
+
+On all 157 items (4,859 atoms; ~139k NLI pairs), same settings:
+
+| | Pipeline | Atom accuracy | Factuality error |
+|-|----------|---------------|------------------|
+| `--item-concurrency 8` | 635 s (4.0 s/item) | 66.5% | 0.226 |
+| `--item-concurrency 16` (4 runs) | 553–585 s (3.5–3.7 s/item) | 66.3–67.0% | 0.225–0.232 |
+
+The full set is harder than its first 10 items. Going from 8 to 16 items in flight
+gains ~11%, so past 8 the servers are near saturation; more throughput needs more
+granite GPUs or a job array over slices of the dataset.
+
+**Where the time goes.** [TIMINGS.md](TIMINGS.md) has the full report for this run,
+with the job, GPU and model setup. `assess_file` ends with a timing report (printed, and
+written as `timing_<results>.json` next to the results). Its server rows come from
+each backend's shared throttle, which sees every request, so concurrent items are
+counted once: `busy_s` is wall time with a request in flight. On the 553 s run
+above (16 in flight):
+
+| | Busy | Requests | Mean in flight | GPU >50% utilised |
+|-|------|----------|----------------|-------------------|
+| vLLM (granite: summarization) | 505 s (91%) | 12,518 | 234 of 256 | 496 s |
+| kev.serve (NLI, 139,829 pairs) | 429 s (78%) | 6,993 | 57 of 64 | 383 s |
+
+Both servers were busy for 385 s at once; granite alone for 120 s, kev alone for
+44 s, neither for 4 s. kev scored 326 pairs per busy second. Merlin (`score`) took
+21 s summed over all items. Both servers ran at their in-flight ceiling, so they,
+not the client, set the pace.
+
+> **Run-to-run variation.** In the runs above, per-item scores differed between
+> runs (mean |Δ| ≈ 0.06) even at the same concurrency, because no stage set a
+> temperature: vLLM sampled granite at its default temperature 1.0, so
+> summarization kept or dropped different contexts each run. Aggregate accuracy
+> was stable (±0.5 points). Every backend now defaults to temperature 0
+> (`fact_reasoner.backends.DEFAULT_TEMPERATURE`), so runs are reproducible and
+> `--nli-cache-dir` can hit across them; scores will shift once against these
+> numbers. Pass `model_options={ModelOption.TEMPERATURE: ...}` to
+> `build_backend` to sample instead.
+
+### LoRA adapters (atomization and NLI)
+
+Two LoRA adapters fine-tuned on `granite-4.2-8b` can replace prompted stages:
+
+| Adapter | Flag | Replaces | Output |
+|---------|------|----------|--------|
+| **Atomizer-reviser** | `--atomizer-adapter` | Atomizer **and** Reviser (one call per response) | One decontextualized atom per line |
+| **NLI** | `--nli-adapter` | The few-shot NLI prompt (one call per premise/hypothesis pair) | `{"label": "entailment" \| "contradiction" \| "neutral"}` |
+
+vLLM serves the adapters next to the base model, each under its own name, and
+FactReasoner calls each one by that name. Use either or both; every stage without an
+adapter (summarization, query building, and any stage you don't replace) keeps using
+the base model.
+
+**Serving.** Let `fact-reasoner` start the server with the adapters loaded:
+
+```bash
+fact-reasoner --backend vllm \
+    --model /path/to/granite-4.2-8b --served-model granite-4.2-8b \
+    --atomizer-adapter fr-atomizer-reviser --atomizer-adapter-path /path/to/atomizer \
+    --nli-adapter fr-nli --nli-adapter-path /path/to/nli \
+    --max-lora-rank 64 \
+    --input-file data/example.jsonl --output-dir results/ \
+    --pipeline factreasoner --merlin-path /path/to/merlin
+```
+
+or start vLLM yourself and connect as a client (no `--model`, no adapter paths):
+
+```bash
+vllm serve /path/to/granite-4.2-8b --served-model-name granite-4.2-8b \
+    --enable-lora --max-lora-rank 64 \
+    --lora-modules fr-atomizer-reviser=/path/to/atomizer fr-nli=/path/to/nli
+
+fact-reasoner --backend vllm --base-url http://localhost:8000/v1 \
+    --served-model granite-4.2-8b \
+    --atomizer-adapter fr-atomizer-reviser --nli-adapter fr-nli \
+    --query "..." --response "..." \
+    --pipeline factreasoner --merlin-path /path/to/merlin
+```
+
+The adapter names are your choice; they only have to match between `vllm serve` and
+`fact-reasoner`. `--max-lora-rank` is only needed when an adapter's rank exceeds
+vLLM's default (16) — `64` above is an example, use your adapters' actual rank. In
+Python, pass `atomizer_backend=` / `nli_backend=` to `FactualityRunner` (see
+[Programmatic use](#programmatic-use)), or use
+`fact_reasoner.core.AtomizerReviser(backend)` and
+`fact_reasoner.core.NLIAdapterExtractor(backend, nli_method=...)` directly.
+
+**How they are called.** Each adapter is sent exactly the conversation it was
+trained on, with no Mellea instruction template, and with reasoning disabled
+(granite-4.2 reasons by default):
+
+- *Atomizer-reviser*: the user query, then the response as the assistant turn, then
+  the `<atomizer>` instruction. Its lines become the atoms (blank lines and any stray
+  numbering or bullets are dropped). For response-only inputs, which have no query,
+  the user turn is omitted.
+- *NLI*: one user message, `Text A (premise): … Text B (hypothesis): …` followed by
+  the `<nli>` instruction.
+
+**Fit with the pipeline.** The atomizer-reviser returns atoms in the same form as the
+Atomizer, and FactReasoner and the baselines skip their revision stage for them. The
+NLI adapter's `{"label": ...}` answer is a format the NLI extractor already parses,
+so labels, validation retries, the neutral fallback and both probability methods are
+unchanged: `--nli-method logprobs` reads the probability of the label's own tokens,
+and `--nli-method simbauq` samples the adapter across temperatures. Adapter verdicts
+get their own `--nli-cache-dir` keys, so they never mix with few-shot verdicts.
+
+**Before relying on them**, check on your GPU node:
+
+- that your vLLM version supports LoRA for the `granite-4.2-8b` architecture (if
+  not, merge each adapter into the base weights and serve the merged model under the
+  adapter's name instead);
+- that it accepts the reasoning switch FactReasoner sends
+  (`chat_template_kwargs.enable_thinking=false` together with
+  `reasoning_effort="none"`) — if a request is rejected, every adapter call fails and
+  falls back (empty atoms / neutral relations), which telemetry's
+  `fact_reasoner.fallbacks` counter shows;
+- with `logprobs`, how well the NLI adapter's label probabilities are calibrated: a
+  model trained to answer only the label can be near-certain on every pair, which
+  flattens the evidence strengths the Markov network relies on. `simbauq` derives
+  confidence from agreement across samples instead.
+
+### Performance
+
+The pipeline runs everything that does not depend on an earlier result
+concurrently, under one request budget per backend:
+
+- **Retrieval.** Every atom (and the query) is retrieved in its own worker, so
+  searches, page fetches and context summaries for all atoms overlap.
+  `per_atom_timeout` (default 180 s) caps the whole batch, and an atom still
+  running at the deadline is logged and skipped instead of holding up the rest.
+- **Page cache.** Searches for different atoms of one response return many of the
+  same pages, so each page is fetched once per assessment; concurrent requests for
+  the same page wait for the first download. A failed fetch is not retried.
+- **One summarization pass.** Contexts are summarized as they are retrieved. With
+  `--use-summarizer`, `build()` summarizes only what is left (the question's
+  contexts), in a single batch, instead of summarizing every context again.
+- **Shared throttle.** All LLM calls to a backend share one concurrency ceiling (32
+  in flight) and rate limit (1500/min) — `fact_reasoner.utils.throttle_for(backend)`
+  — whichever stage or thread issues them, so overlapping stages cannot overload
+  the server. Raising the ceiling buys little: RITS throughput was measured to
+  level off near 9 requests/s, with latency growing instead.
+
+What still dominates is NLI (75–85% of a run), which is why `--nli-mode fast` is
+the default and `--nli-prompt label_only` is available. Measured on RITS
+(`llama-3-3-70b-instruct`, Google retrieval, a 16-atom biography):
+
+| Change | Before | After |
+|--------|--------|-------|
+| Retrieval stage (v2, top-k 3 / top-k 5) | 32 s / 43 s | 14 s / 14 s |
+| Page fetches per assessment | ~180 | ~70 |
+| `build()` summarization with `--use-summarizer` | 17 s, 31 calls | 3 s, 4 calls |
+| v3 end to end, `--nli-mode fast` vs `all_pairs` | 343 s, 1066 NLI calls | 122 s, 256 NLI calls (same predictions) |
+
+And the two NLI prompts, on 10 items (248 human-labelled atoms) of
+`data/bio-labeled_wikipedia.jsonl`, v2 with `--nli-mode fast`:
+
+| `--nli-prompt` | Atom accuracy | Factuality error | Brier | Wall time |
+|----------------|---------------|------------------|-------|-----------|
+| `few_shot` (default) | 79.8% | 0.123 | 0.231 | 965 s |
+| `label_only` | 78.6% | 0.134 | 0.255 | 321 s |
+
+The prompts agreed on 237 of the 248 atoms. A 10-item sample cannot separate a
+one-point accuracy difference from noise, so use `few_shot` for published numbers.
+
+> **Behavior change with `--use-summarizer`.** A context summarized twice used to
+> have its prior multiplied by both summaries' confidences; it is now discounted
+> once. Context priors, and so scores, can shift slightly in that mode.
+
+### Telemetry
+
+FactReasoner can emit [OpenTelemetry](https://opentelemetry.io/) traces and metrics
+to show where a run spends its time. It is off by default and costs nothing when
+off. Install the extra, then enable it with Mellea's environment variables
+(FactReasoner reuses Mellea's configuration, so its spans and Mellea's LLM-call
+spans land in the same traces):
+
+```bash
+uv pip install "fact_reasoner[telemetry]"
+
+# Print traces and metrics to stdout
+export MELLEA_TRACES_ENABLED=true MELLEA_TRACES_CONSOLE=true
+export MELLEA_METRICS_ENABLED=true MELLEA_METRICS_CONSOLE=true
+export OTEL_SERVICE_NAME=fact-reasoner
+
+# ...or send them to an OTLP collector (e.g. a local Jaeger on :4317)
+export MELLEA_TRACES_OTLP=true MELLEA_METRICS_OTLP=true
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+```
+
+Each run produces one trace: `fact_reasoner.build` with a span per stage
+(`atom_extraction`, `atom_revision`, `context_retrieval`,
+`context_summarization_*`, `nli_relation_extraction`,
+`graphical_model_construction`), Mellea's spans for every LLM call nested under the
+stage that made them (with token counts and retry attempts), then
+`fact_reasoner.score` and `fact_reasoner.inference`. With the atomizer-reviser adapter
+there is no `atom_revision` span, and `atom_extraction` records
+`fact_reasoner.atom_extractor=AtomizerReviser`. Metrics:
+
+| Metric | Meaning |
+|--------|---------|
+| `fact_reasoner.stage.duration` | Seconds per pipeline stage (attribute `stage`). |
+| `fact_reasoner.fallbacks` | Results replaced by a default after a failure — e.g. an unrevised atom or a neutral NLI label (attributes `component`, `reason`). |
+| `mellea.llm.request.duration`, `gen_ai.client.token.usage` | Per-LLM-call latency and input/output tokens (from Mellea). |
+
+Leave `MELLEA_TRACES_CONTENT` unset: it records full prompts and responses on spans,
+which include the user's query, response and retrieved documents.
+
+**Reasoning models.** Telemetry is how to spot models that "think" before answering:
+their output token counts are far larger than the answer. The atom `Reviser`
+therefore disables reasoning by default (`Reviser(backend, reasoning=False)`); on
+`granite4.2:3b` this cut each revision call from ~440–2,000 output tokens and
+7–21 s to ~25 tokens and ~0.4 s, though a model that small also resolved fewer
+references. Pass `reasoning=True` to turn it back on, or `reasoning=None` to send
+no setting at all (for hosted models that reject a reasoning parameter). The LoRA
+adapters take the same `reasoning` argument (`AtomizerReviser`,
+`NLIAdapterExtractor`) and also default to off, as they were trained.
 
 ## Quick Start
 
@@ -508,7 +962,7 @@ Two things to pick before you run anything:
 
 - **`--pipeline-version {v1,v2,v3}`** — the graph shape (default `v2`).
 - **`--nli-mode {all_pairs,fast}`** — how many NLI candidate pairs get scored
-  (default `all_pairs`). This is the main cost dial: NLI is the dominant expense of a
+  (default `fast`). This is the main cost dial: NLI is the dominant expense of a
   run, and `fast` prunes the pairs it scores while keeping the same graph. How much it
   saves depends on the workload (measured between ~1.2× and ~5×).
 
@@ -516,8 +970,8 @@ They are independent, so any version pairs with either mode.
 
 #### 1. The CLI (easiest)
 
-**`all_pairs` — score every candidate pair.** The default: highest fidelity, and what
-reproduces the published numbers.
+**`all_pairs` — score every candidate pair.** Highest fidelity, and what reproduces
+the published numbers; pass it explicitly, since the default is `fast`.
 
 ```bash
 fact-reasoner \
@@ -529,7 +983,7 @@ fact-reasoner \
     --topic "Albert Einstein"
 ```
 
-**`fast` — same assessment, far fewer LLM calls.** Only one line differs:
+**`fast` — same assessment, far fewer LLM calls.** The default. Only one line differs:
 
 ```bash
 fact-reasoner \
@@ -541,8 +995,8 @@ fact-reasoner \
     --topic "Albert Einstein"
 ```
 
-Since `all_pairs` is the default, you can simply omit `--nli-mode` to get it — the
-first command above is explicit for contrast, not because the flag is required.
+Since `fast` is the default, you can simply omit `--nli-mode` to get it — the
+second command above is explicit for contrast, not because the flag is required.
 
 **How to confirm `fast` took effect.** On `--pipeline factreasoner` it prints a
 one-line banner at startup:
@@ -551,7 +1005,7 @@ one-line banner at startup:
 [FactReasoner] NLI pair policy: provenance (cascade=True, near-dup dedup=True)
 ```
 
-`all_pairs` prints nothing, since it is the default behavior.
+`all_pairs` prints nothing, since it is the original, unpruned behavior.
 
 > `--nli-mode` applies to `--pipeline factreasoner` only. The baseline pipelines
 > (`factscore`, `veriscore`, `factverify`) do not build a pair-scored NLI graph, so
@@ -585,8 +1039,8 @@ print(f"Factuality score: {results['factuality_score']:.2%}")
 
 | Mode | Use it when | Trade-off |
 |------|-------------|-----------|
-| `all_pairs` *(default)* | Publishing results, comparing against the paper, or any run that must be bit-for-bit reproducible. | Cost is quadratic in atoms for `v2`, cubic-ish for `v3`. |
-| `fast` | Iterating, large datasets, or exploratory runs where cost matters more than exact reproducibility. | Prunes candidate pairs, so it can miss a relation — see the [accuracy note](#nli-cost-control-advanced). |
+| `all_pairs` | Publishing results, comparing against the paper, or any run that must be bit-for-bit reproducible. | Cost is quadratic in atoms for `v2`, cubic-ish for `v3`. |
+| `fast` *(default)* | Iterating, large datasets, or exploratory runs where cost matters more than exact reproducibility. | Prunes candidate pairs, so it can miss a relation — see the [accuracy note](#nli-cost-control-advanced). |
 
 Start with `fast` while developing, then confirm final numbers with `all_pairs`.
 
@@ -631,10 +1085,22 @@ atom_reviser = Reviser(backend)
 context_summarizer = ContextSummarizer(backend)
 nli_extractor = NLIExtractor(backend)
 
+# Optional: the granite-4.2-8b LoRA adapters, served by vLLM next to the base
+# model (see "LoRA adapters"). The atomizer-reviser replaces atom_extractor and
+# makes the revision stage a no-op; the NLI adapter replaces nli_extractor.
+#   from fact_reasoner.core import AtomizerReviser, NLIAdapterExtractor
+#   url = "http://localhost:8000/v1"
+#   atom_extractor = AtomizerReviser(
+#       build_backend("vllm", model_id="fr-atomizer-reviser", base_url=url))
+#   nli_extractor = NLIAdapterExtractor(
+#       build_backend("vllm", model_id="fr-nli", base_url=url))
+
 # The Retriever fetches evidence; ContextRetriever wraps it for parallel,
-# per-atom retrieval (optionally summarizing each context).
+# per-atom retrieval (optionally summarizing each context). SourceRetriever's
+# num_workers is the page-fetch threads per search; ContextRetriever runs one
+# worker per atom by default (pass num_workers only to cap it).
 retriever = SourceRetriever(
-    service_type="google",  # or "wikipedia", "chromadb"
+    service_type="google",  # or "wikipedia", "chromadb", "ntrs"
     top_k=5,
     fetch_text=True,
     query_builder=query_builder,
@@ -643,7 +1109,6 @@ retriever = SourceRetriever(
 context_retriever = ContextRetriever(
     retriever=retriever,
     context_summarizer=context_summarizer,
-    num_workers=4,
 )
 
 # Create the FactReasoner pipeline.
@@ -709,9 +1174,11 @@ results, marginals = pipeline.score()
 |-----------|-------|-------------|
 | **Atomizer** | `Atomizer` | Decomposes text into atomic claims using few-shot prompting |
 | **Reviser** | `Reviser` | Decontextualizes atoms by resolving pronouns and vague references |
+| **Atomizer-reviser** | `AtomizerReviser` | Atomizer + Reviser in one call, via the granite-4.2-8b LoRA adapter (optional) |
 | **Retriever** | `ContextRetriever` | Retrieves relevant evidence from Wikipedia, Google, or vector stores |
 | **Summarizer** | `ContextSummarizer` | Summarizes retrieved contexts with respect to specific atoms |
 | **NLI Extractor** | `NLIExtractor` | Predicts entailment/contradiction/neutral relationships |
+| **NLI adapter** | `NLIAdapterExtractor` | `NLIExtractor` via the granite-4.2-8b NLI LoRA adapter (optional) |
 | **Fact Graph** | `FactGraph` | Graph representation of atoms, contexts, and their relationships |
 | **Search API** | `SearchAPI` | Google Search via Serper API with SQLite caching |
 
@@ -722,12 +1189,12 @@ LLM Response
     │
     ▼
 ┌─────────────┐
-│  Atomizer   │ ──► Atomic Claims (atoms)
-└─────────────┘
-    │
-    ▼
-┌─────────────┐
-│   Reviser   │ ──► Decontextualized atoms
+│  Atomizer   │ ──► Atomic Claims (atoms)          ┐  or, in one call, the
+└─────────────┘                                    │  atomizer-reviser LoRA
+    │                                              │  adapter
+    ▼                                              │
+┌─────────────┐                                    │
+│   Reviser   │ ──► Decontextualized atoms         ┘
 └─────────────┘
     │
     ▼
@@ -743,7 +1210,7 @@ LLM Response
     ▼
 ┌─────────────┐
 │     NLI     │ ──► Entailment/Contradiction relationships
-└─────────────┘
+└─────────────┘     (few-shot or label-only prompt, or the NLI LoRA adapter)
     │
     ▼
 ┌─────────────┐
@@ -787,7 +1254,29 @@ retriever = SourceRetriever(
 )
 ```
 
+### NASA Technical Reports Server (NTRS)
+
+A public API, so it needs no API key and no cache directory. Records without an abstract
+are skipped.
+
+```python
+retriever = SourceRetriever(
+    service_type="ntrs",
+    top_k=5
+)
+```
+
+NTRS is a keyword index that AND-matches every term, so natural-language queries match
+almost nothing. For benchmarking, queries are normalized deterministically — see
+[docs/NTRS_KEYWORD_NORMALIZATION.md](docs/NTRS_KEYWORD_NORMALIZATION.md) for the
+methodology and [docs/NTRS_BENCHMARK.md](docs/NTRS_BENCHMARK.md) for the Google-vs-NTRS
+retrieval benchmark.
+
 ### ChromaDB Vector Store
+
+Requires a manual `pip install chromadb`. It is not a dependency of this project and
+has no extra, because all releases through 1.5.9 carry unpatched critical advisories
+(CVE-2026-45829, CVE-2026-45833) — see [Note on ChromaDB](#installation) above.
 
 ```python
 retriever = SourceRetriever(
@@ -894,6 +1383,7 @@ The `score()` method returns a results dictionary:
 
 ```
 FactReasoner/
+├── TIMINGS.md                # Measured timings: kev.serve NLI + vLLM granite, 2 H100s
 ├── src/fact_reasoner/
 │   ├── __init__.py           # Package exports
 │   ├── assessor.py           # Main FactReasoner class
@@ -905,21 +1395,31 @@ FactReasoner/
 │   ├── markov_network.py     # Markov network + UAI serialization
 │   ├── fact_graph.py         # Graph representation
 │   ├── search_api.py         # Google Search API wrapper
+│   ├── ntrs_api.py           # NASA Technical Reports Server API client
+│   ├── ntrs_query.py         # Deterministic NTRS keyword normalization
+│   ├── telemetry.py          # OpenTelemetry spans/metrics (opt-in)
 │   ├── utils.py              # Utility functions
 │   ├── core/
 │   │   ├── atomizer.py       # Atomic decomposition
+│   │   ├── atomizer_reviser.py  # One-shot atomization via the LoRA adapter
 │   │   ├── reviser.py        # Atom decontextualization
 │   │   ├── retriever.py      # Context retrieval
 │   │   ├── summarizer.py     # Context summarization
-│   │   ├── nli.py            # NLI extraction
+│   │   ├── nli.py            # NLI extraction (few-shot prompt or LoRA adapter)
+│   │   ├── nli_cache.py      # Cross-run NLI verdict cache
 │   │   ├── query_builder.py  # Search query generation
 │   │   └── utils.py          # Core utilities
-│   └── baselines/
-│       ├── factscore.py      # FactScore implementation
-│       ├── factverify.py     # FactVerify implementation
-│       └── veriscore.py      # VeriScore implementation
+│   ├── baselines/
+│   │   ├── factscore.py      # FactScore implementation
+│   │   ├── factverify.py     # FactVerify implementation
+│   │   └── veriscore.py      # VeriScore implementation
+│   └── benchmarks/
+│       ├── build_ntrs_benchmark.py  # Frozen per-backend dataset generation
+│       └── eval_ntrs_benchmark.py   # Frozen-dataset evaluation runner
 ├── scripts/
-│   └── run_vllm.bsub         # LSF template (local vLLM + fact-reasoner)
+│   ├── run_kev.bsub          # LSF template (Ollama decision model + vLLM)
+│   ├── run_kev_vllm.bsub     # LSF template (kev.serve + vLLM, one GPU each)
+│   └── submit_kev_vllm_smoke.sh  # BlueVela smoke jobs for the kev.serve setup
 ├── docs/
 |   ├── examples
 │   │   ├── assessors/        # Assessor examples
@@ -974,3 +1474,8 @@ Apache License 2.0 - see [LICENSE](LICENSE) for details.
 ## Contributing
 
 Contributions are welcome! Please open an issue or submit a pull request on [GitHub](https://github.com/IBM/FactReasoner).
+
+## ConTrust: credibility-weighted context priors
+
+Contexts can be weighted by the credibility of their source instead of a fixed
+prior. See [docs/CONTRUST.md](docs/CONTRUST.md).

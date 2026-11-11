@@ -82,23 +82,21 @@ class TestContextSummarizerGetProbability:
 
         summarizer = ContextSummarizer(backend=mock_backend)
 
-        # Mirrors the real OpenAI backend shape: mellea stores
-        # ChatCompletion.model_dump() under "oai_chat_response", so logprobs
-        # live at oai_chat_response["choices"][0]["logprobs"]["content"].
+        # Mirrors the real OpenAI backend shape: mellea's OpenAIBackend stores
+        # ChatCompletion.model_dump() at output.raw.response, so logprobs live
+        # at raw.response["choices"][0]["logprobs"]["content"].
         mock_output = MagicMock()
-        mock_output._meta = {
-            "oai_chat_response": {
-                "choices": [
-                    {
-                        "logprobs": {
-                            "content": [
-                                {"token": "Test", "logprob": -0.5},
-                                {"token": "summary", "logprob": -0.3},
-                            ]
-                        }
+        mock_output.raw.response = {
+            "choices": [
+                {
+                    "logprobs": {
+                        "content": [
+                            {"token": "Test", "logprob": -0.5},
+                            {"token": "summary", "logprob": -0.3},
+                        ]
                     }
-                ]
-            }
+                }
+            ]
         }
 
         result = summarizer._get_probability(mock_output)
@@ -112,20 +110,32 @@ class TestContextSummarizerGetProbability:
         summarizer = ContextSummarizer(backend=mock_backend)
 
         mock_output = MagicMock()
-        mock_output._meta = {
-            "oai_chat_response": {
-                "choices": [
-                    {
-                        "logprobs": {
-                            "content": [],  # no tokens
-                        }
+        mock_output.raw.response = {
+            "choices": [
+                {
+                    "logprobs": {
+                        "content": [],  # no tokens
                     }
-                ]
-            }
+                }
+            ]
         }
 
         result = summarizer._get_probability(mock_output)
-        assert result == 0.0  # empty logprobs -> avg over 0 tokens -> 0.0
+        # No tokens means no information: 1.0 leaves the context prior unchanged.
+        assert result == 1.0
+
+    def test_get_probability_without_logprobs_keeps_the_prior(self, capsys):
+        # Ollama returns no logprobs at all. The confidence multiplies the
+        # context prior, so 0.0 here would zero every prior and leave every atom
+        # at 0.5 whatever the NLI found.
+        summarizer = ContextSummarizer(backend=MagicMock())
+        mock_output = MagicMock()
+        mock_output.raw.response = {"choices": [{"logprobs": None}]}
+
+        assert summarizer._get_probability(mock_output) == 1.0
+        assert summarizer._get_probability(mock_output) == 1.0
+        # Reported once per summarizer, not once per context.
+        assert capsys.readouterr().out.count("[Summarizer] No logprobs") == 1
 
 
 class TestContextSummarizerRunBatch:

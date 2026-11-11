@@ -335,9 +335,14 @@ class FactVerify:
         # Build the atoms
         if not has_atoms:
             self.atoms = build_atoms(
-                response=self.response, atom_extractor=self.atom_extractor
+                response=self.response,
+                atom_extractor=self.atom_extractor,
+                query=self.query,
             )
-            self.revise_atoms = True  # revise atoms if newly created
+            # Revise newly created atoms, unless the extractor already did.
+            self.revise_atoms = not getattr(
+                self.atom_extractor, "revises_atoms", False
+            )
             print(f"[FactVerify] Extracted {len(self.atoms)} atoms.")
             for aid in self.atoms:
                 print(f"[FactVerify] {self.atoms[aid]}")
@@ -352,7 +357,9 @@ class FactVerify:
             assert self.response is not None, "The atom reviser requires a response."
             atom_ids = [aid for aid in sorted(self.atoms.keys())]
             old_atoms = [self.atoms[aid].get_text() for aid in atom_ids]
-            result = asyncio.run(self.atom_reviser.run_batch(old_atoms, self.response))
+            result = asyncio.run(
+                self.atom_reviser.run_batch(old_atoms, self.response, self.query)
+            )
             for i, aid in enumerate(atom_ids):
                 elem = result[i]
                 self.atoms[aid].set_text(elem["revised_unit"])

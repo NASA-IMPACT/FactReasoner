@@ -483,42 +483,259 @@ class TestGatherWithProgress:
         assert asyncio.run(gather_with_progress([])) == []
 
 
-class _FakeTokenLogprob:
-    """Duck-types Mellea >=0.7's `ollama.ChatResponse.logprobs` entries."""
+class _FakeRaw:
+    """Minimal stand-in for mellea's RawProviderResponse -- only the
+    `.response` attribute extract_logprobs_from_output() reads."""
+
+    def __init__(self, response=None):
+        self.response = response
+
+
+class _FakeOutput:
+    """Minimal stand-in for mellea's ModelOutputThunk, carrying only the
+    attribute extract_logprobs_from_output() reads."""
+
+    def __init__(self, raw_response=None):
+        self.raw = _FakeRaw(raw_response)
+
+
+class TestExtractLogprobsFromOutput:
+    """Tests for extract_logprobs_from_output.
+
+    Covers only `output.raw.response["choices"][0]["logprobs"]` -- the shape
+    mellea's OpenAIBackend produces, which is what all of FactReasoner's
+    rits/vllm/openai backend kinds resolve to (RITSBackend is a subclass of
+    OpenAIBackend, not a separate implementation). See the function's own
+    docstring for why no other shape is handled: none is reachable through
+    `build_backend` today.
+    """
+
+    def test_openai_shape_raw_response(self):
+        output = _FakeOutput(
+            raw_response={
+                "choices": [
+                    {"logprobs": {"content": [{"token": "a", "logprob": -0.1}]}}
+                ]
+            }
+        )
+        assert extract_logprobs_from_output(output) == [{"token": "a", "logprob": -0.1}]
+
+    def test_missing_logprobs_raises(self):
+        output = _FakeOutput()
+        with pytest.raises(AssertionError, match="logprobs missing"):
+            extract_logprobs_from_output(output)
+
+    def test_dict_without_content_key_raises(self):
+        output = _FakeOutput(
+            raw_response={"choices": [{"logprobs": {"unexpected": []}}]}
+        )
+        with pytest.raises(ValueError, match="'content' key"):
+            extract_logprobs_from_output(output)
+
+
+class TestSetThrottle:
+    def test_replaces_the_shared_throttle(self):
+        from fact_reasoner.utils import set_throttle, throttle_for
+
+        class Backend:
+            pass
+
+        b = Backend()
+        default = throttle_for(b)
+        t = set_throttle(b, max_concurrency=256, rate_per_minute=10_000)
+        assert t is throttle_for(b) and t is not default
+        assert (t.max_concurrency, t.rate_per_minute) == (256, 10_000)
+
+    def test_unweakrefable_backend_is_ignored(self):
+        from fact_reasoner.utils import set_throttle
+
+        assert set_throttle(object(), max_concurrency=2) is None
+
+
+class TestThrottleActivity:
+    def test_busy_time_counts_overlapping_requests_once(self, monkeypatch):
+        import asyncio
+
+        from fact_reasoner import utils
+        from fact_reasoner.utils import BackendThrottle
+
+        clock = [100.0]
+        monkeypatch.setattr(utils.time, "monotonic", lambda: clock[0])
+        t = BackendThrottle(max_concurrency=10, rate_per_minute=10_000)
+
+        async def run():
+            a = await t.acquire()
+            clock[0] += 1.0
+            b = await t.acquire()  # overlaps a
+            clock[0] += 1.0
+            t.release(a)
+            clock[0] += 1.0
+            t.release(b)  # busy 100 -> 103
+            clock[0] += 5.0  # idle
+            c = await t.acquire()
+            clock[0] += 2.0
+            t.release(c)  # busy 108 -> 110
+
+        asyncio.run(run())
+        s = t.stats()
+        assert s["requests"] == 3
+        assert s["busy_s"] == pytest.approx(5.0)
+        assert s["service_s"] == pytest.approx(2.0 + 2.0 + 2.0)
+        assert s["span_s"] == pytest.approx(10.0)
+        assert s["peak_in_flight"] == 2
+        assert t.busy_intervals() == [(100.0, 103.0), (108.0, 110.0)]
+
+    def test_run_throttled_records_requests(self):
+        import asyncio
+
+        from fact_reasoner.utils import BackendThrottle, run_throttled
+
+        t = BackendThrottle(max_concurrency=4, rate_per_minute=10_000)
+
+        async def work(x):
+            await asyncio.sleep(0.01)
+            return x
+
+        assert asyncio.run(run_throttled(work, [1, 2, 3], throttle=t)) == [1, 2, 3]
+        s = t.stats()
+        assert s["requests"] == 3 and s["busy_s"] > 0
+        assert s["mean_concurrency"] > 1
+
+    def test_overlap_of_two_backends(self, monkeypatch):
+        from fact_reasoner.utils import BackendThrottle, busy_overlap_s
+
+        a, b = BackendThrottle(), BackendThrottle()
+        monkeypatch.setattr(a, "busy_intervals", lambda: [(0, 10), (20, 30)])
+        monkeypatch.setattr(b, "busy_intervals", lambda: [(5, 25)])
+        assert busy_overlap_s(a, b) == pytest.approx(5 + 5)
+
+
+class TestTransientRetry:
+    @staticmethod
+    def _no_sleep(monkeypatch):
+        import asyncio
+
+        from fact_reasoner import utils
+
+        real = asyncio.sleep
+
+        async def fast(_):
+            await real(0)
+
+        monkeypatch.setattr(utils.asyncio, "sleep", fast)
+
+    def test_transport_errors_are_retried_then_succeed(self, monkeypatch):
+        import asyncio
+
+        import httpx
+
+        from fact_reasoner.utils import run_throttled
+
+        self._no_sleep(monkeypatch)
+        attempts = {}
+
+        async def factory(item):
+            attempts[item] = attempts.get(item, 0) + 1
+            if attempts[item] == 1:
+                raise httpx.ReadError("", request=httpx.Request("POST", "http://x"))
+            return item * 10
+
+        assert asyncio.run(run_throttled(factory, [1, 2])) == [10, 20]
+        assert attempts == {1: 2, 2: 2}
+
+    def test_gives_up_after_the_retry_budget(self, monkeypatch):
+        import asyncio
+
+        from fact_reasoner.utils import TRANSIENT_RETRIES, run_throttled
+
+        self._no_sleep(monkeypatch)
+        calls = []
+
+        async def factory(item):
+            calls.append(item)
+            raise ConnectionError("down")
+
+        (out,) = asyncio.run(run_throttled(factory, ["x"]))
+        assert isinstance(out, ConnectionError)
+        assert len(calls) == TRANSIENT_RETRIES + 1
+
+    def test_non_transient_errors_are_not_retried(self, monkeypatch):
+        import asyncio
+
+        import httpx
+        import openai
+
+        from fact_reasoner.utils import run_throttled
+
+        self._no_sleep(monkeypatch)
+        req = httpx.Request("POST", "http://x")
+        errors = [
+            ValueError("bad output"),
+            openai.BadRequestError("x", response=httpx.Response(400, request=req), body=None),
+            openai.InternalServerError("x", response=httpx.Response(500, request=req), body=None),
+        ]
+        for error in errors:
+            calls = []
+
+            async def factory(item, error=error, calls=calls):
+                calls.append(item)
+                raise error
+
+            (out,) = asyncio.run(run_throttled(factory, ["x"]))
+            assert out is error and calls == ["x"], type(error)
+
+    def test_classification(self):
+        import httpx
+        import openai
+
+        from fact_reasoner.utils import is_transient_error
+
+        req = httpx.Request("POST", "http://x")
+        assert is_transient_error(openai.APITimeoutError(request=req))
+        assert is_transient_error(openai.APIConnectionError(request=req))
+        assert is_transient_error(httpx.ReadError("", request=req))
+        assert is_transient_error(TimeoutError())
+        assert not is_transient_error(KeyError("x"))
+
+
+class _FakeOllamaTokenLogprob:
+    """Duck-types `ollama.ChatResponse.logprobs` entries (token/logprob attrs)."""
 
     def __init__(self, token, logprob):
         self.token = token
         self.logprob = logprob
 
 
-class _FakeRaw:
+class _FakeOllamaChatResponse:
+    def __init__(self, logprobs):
+        self.logprobs = logprobs
+
+
+class _FakeProviderRaw:
+    """Stand-in for mellea's RawProviderResponse, including `.provider`."""
+
     def __init__(self, provider, response):
         self.provider = provider
         self.response = response
 
 
-class _FakeOllamaResponse:
-    def __init__(self, logprobs):
-        self.logprobs = logprobs
+class _FakeProviderOutput:
+    def __init__(self, provider, response):
+        self.raw = _FakeProviderRaw(provider, response)
 
 
-class _FakeOutput:
-    def __init__(self, raw=None, meta=None):
-        self.raw = raw
-        self._meta = meta or {}
-
-
-class TestExtractLogprobsFromOutput:
-    """Tests for extract_logprobs_from_output across backend response shapes."""
+class TestExtractLogprobsFromOllamaOutput:
+    """Ollama's raw response is an `ollama.ChatResponse`, not an OpenAI dict."""
 
     def test_ollama_raw_shape(self):
-        output = _FakeOutput(
-            raw=_FakeRaw(
-                provider="ollama",
-                response=_FakeOllamaResponse(
-                    [_FakeTokenLogprob("hi", -0.1), _FakeTokenLogprob("!", -0.2)]
-                ),
-            )
+        output = _FakeProviderOutput(
+            "ollama",
+            _FakeOllamaChatResponse(
+                [
+                    _FakeOllamaTokenLogprob("hi", -0.1),
+                    _FakeOllamaTokenLogprob("!", -0.2),
+                ]
+            ),
         )
         assert extract_logprobs_from_output(output) == [
             {"token": "hi", "logprob": -0.1},
@@ -526,33 +743,15 @@ class TestExtractLogprobsFromOutput:
         ]
 
     def test_ollama_raw_shape_missing_logprobs_raises(self):
-        output = _FakeOutput(
-            raw=_FakeRaw(provider="ollama", response=_FakeOllamaResponse(None))
-        )
+        output = _FakeProviderOutput("ollama", _FakeOllamaChatResponse(None))
         with pytest.raises(AssertionError):
             extract_logprobs_from_output(output)
 
-    def test_legacy_meta_logprobs_key(self):
-        output = _FakeOutput(meta={"logprobs": [{"token": "hi", "logprob": -0.1}]})
-        assert extract_logprobs_from_output(output) == [
-            {"token": "hi", "logprob": -0.1}
-        ]
-
-    def test_legacy_meta_oai_chat_response(self):
-        output = _FakeOutput(
-            meta={
-                "oai_chat_response": {
-                    "choices": [
-                        {"logprobs": {"content": [{"token": "hi", "logprob": -0.1}]}}
-                    ]
-                }
-            }
+    def test_non_ollama_provider_uses_openai_shape(self):
+        output = _FakeProviderOutput(
+            "openai",
+            {"choices": [{"logprobs": {"content": [{"token": "a", "logprob": -1.0}]}}]},
         )
         assert extract_logprobs_from_output(output) == [
-            {"token": "hi", "logprob": -0.1}
+            {"token": "a", "logprob": -1.0}
         ]
-
-    def test_no_logprobs_anywhere_raises(self):
-        output = _FakeOutput(raw=_FakeRaw(provider="litellm", response=None))
-        with pytest.raises(AssertionError):
-            extract_logprobs_from_output(output)
